@@ -104,6 +104,6 @@ output/
 # uv manage
 pyproject.toml
 uv.lock
-
+docs/
 docs/*.pdf
 docs/design-cn.md
