@@ -1,5 +1,5 @@
 # Project Summary: [mcp-server-youtube-transcript](https://github.com/kimtaeyoon83/mcp-server-youtube-transcript) (266 loc)
-
+Original Prompts
 ## Using o1
 - **Cost Calculation:** 33.0 + 32.2 + 31.7 + 26.8 + 24.1 + 20.3 + 21.2 + 18.3 + 22.8 + 15.2 = **304.6 cents**
   - **Summary**
@@ -7,7 +7,7 @@
     - Elapsed Time: **4 minutes**
     - Observations: **Expensive af**
 
-## Using 40-mini
+## Using 4o-mini
 - **Cost Calculation:** 0.2 + 0.2 + 0.2 + 0.2 + 0.2 + 0.1 + 0.1 + 0.0 + 0.1 + 0.1 = **1.3 cents**
   - **Summary**
     - Total Output Tokens: **8,678**
@@ -28,7 +28,7 @@
     - Elapsed Time: **5 minutes**
     - Observations: **Best overall**
 
-## Using gemini 2.0 flash exp
+## Using gemini-2.0-flash-exp
 - **Cost Calculation:** 0.5 + 0.5 + 0.5 + 0.4 + 0.3 + 0.2 + 0.0 + 0.1 + 0.1 = **2.6 cents**
   - **Summary**
     - Total Output Tokens: **12,409**

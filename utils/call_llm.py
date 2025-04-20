@@ -46,7 +46,7 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
             client = OpenAI(api_key=api_key, base_url=base_url)
         else:
             client = OpenAI(api_key=api_key)
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        model = os.getenv("OPENAI_MODEL", "gemini-2.0-flash-exp")
         r = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],

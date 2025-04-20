@@ -138,30 +138,38 @@ class IdentifyAbstractions(Node):
             desc_lang_hint = f" (value in {language.capitalize()})"
 
         prompt = f"""
-For the project `{project_name}`:
+You are an expert technical writer and software engineer. Your task is to analyze the following codebase and generate a list of its most important abstractions, focusing on both technical accuracy and beginner accessibility.
+
+Instructions:
+- Be technically accurate and precise in your descriptions.
+- Use beginner-friendly language and analogies only if they do not sacrifice technical correctness.
+- Provide clear, unambiguous output as specified below.
+- Start each section with the required instruction and use the provided format exactly.
+
+Context:
+Project: `{project_name}`
 
 Codebase Context:
 {context}
 
-{language_instruction}Analyze the codebase context.
-Identify the top 5-{max_abstraction_num} core most important abstractions to help those new to the codebase.
+{language_instruction}Analyze the codebase context and identify the 5-10 most important abstractions that are essential for understanding the project.
 
 For each abstraction, provide:
-1. A concise `name`{name_lang_hint}.
-2. A beginner-friendly `description` explaining what it is with a simple analogy, in around 100 words{desc_lang_hint}.
+1. A concise and technically accurate `name`{name_lang_hint}.
+2. A technically accurate, yet beginner-friendly `description` of what this abstraction does. Use a simple analogy only if it helps clarify, but ensure all technical details are correct. Limit to around 100 words{desc_lang_hint}.
 3. A list of relevant `file_indices` (integers) using the format `idx # path/comment`.
 
 List of file indices and paths present in the context:
 {file_listing_for_prompt}
 
-Format the output as a YAML list of dictionaries:
+Format your output as a YAML list of dictionaries, following this example strictly:
 
 ```yaml
 - name: |
     Query Processing{name_lang_hint}
   description: |
     Explains what the abstraction does.
-    It's like a central dispatcher routing requests.{desc_lang_hint}
+    Analogy (if helpful): It's like a central dispatcher routing requests.{desc_lang_hint}
   file_indices:
     - 0 # path/to/file1.py
     - 3 # path/to/related.py
@@ -307,7 +315,16 @@ class AnalyzeRelationships(Node):
             list_lang_note = f" (Names might be in {language.capitalize()})"  # Note for the input list
 
         prompt = f"""
-Based on the following abstractions and relevant code snippets from the project `{project_name}`:
+You are an expert technical writer and software engineer. Your task is to analyze the following abstractions and code snippets from the project and generate a technically accurate and accessible summary and relationships list.
+
+Instructions:
+- Provide a high-level summary that is both technically accurate and easy for beginners to understand.
+- Use markdown formatting with **bold** and *italic* text to highlight important concepts, but do not oversimplify technical details.
+- For relationships, use precise technical language. Only use analogies if they clarify, not replace, technical accuracy.
+- Follow the required YAML format exactly.
+
+Context:
+Project: `{project_name}`
 
 List of Abstraction Indices and Names{list_lang_note}:
 {abstraction_listing}
@@ -316,17 +333,17 @@ Context (Abstractions, Descriptions, Code):
 {context}
 
 {language_instruction}Please provide:
-1. A high-level `summary` of the project's main purpose and functionality in a few beginner-friendly sentences{lang_hint}. Use markdown formatting with **bold** and *italic* text to highlight important concepts.
+1. A high-level, technically accurate `summary` of the project's main purpose and functionality in a few beginner-friendly sentences{lang_hint}. Use markdown formatting with **bold** and *italic* text to highlight important concepts.
 2. A list (`relationships`) describing the key interactions between these abstractions. For each relationship, specify:
     - `from_abstraction`: Index of the source abstraction (e.g., `0 # AbstractionName1`)
     - `to_abstraction`: Index of the target abstraction (e.g., `1 # AbstractionName2`)
-    - `label`: A brief label for the interaction **in just a few words**{lang_hint} (e.g., "Manages", "Inherits", "Uses").
-    Ideally the relationship should be backed by one abstraction calling or passing parameters to another.
-    Simplify the relationship and exclude those non-important ones.
+    - `label`: A brief, technically accurate label for the interaction **in just a few words**{lang_hint} (e.g., "Manages", "Inherits", "Uses").
+    Relationships should be based on actual code interactions (such as function calls, parameter passing, inheritance, etc.).
+    Omit trivial or non-essential relationships.
 
 IMPORTANT: Make sure EVERY abstraction is involved in at least ONE relationship (either as source or target). Each abstraction index must appear at least once across all relationships.
 
-Format the output as YAML:
+Format your output as YAML:
 
 ```yaml
 summary: |
@@ -464,18 +481,20 @@ class OrderChapters(Node):
         # No language variation needed here in prompt instructions, just ordering based on structure
         # The input names might be translated, hence the note.
         prompt = f"""
-Given the following project abstractions and their relationships for the project ```` {project_name} ````:
+You are an expert technical writer and software engineer. Your task is to determine the most logical and pedagogically effective order to present the following abstractions in a technical tutorial for the project ```` {project_name} ````.
+
+Instructions:
+- Carefully analyze the abstractions and their relationships.
+- Order the abstractions so that foundational and user-facing concepts come first, followed by more detailed or supporting abstractions.
+- Prioritize technical accuracy in the order, but make the sequence accessible for beginners.
+- Output only the ordered list of abstraction indices, with the abstraction name as a comment for clarity, using the format `idx # AbstractionName`.
+- Follow the YAML format exactly as shown in the example.
 
 Abstractions (Index # Name){list_lang_note}:
 {abstraction_listing}
 
 Context about relationships and project summary:
 {context}
-
-If you are going to make a tutorial for ```` {project_name} ````, what is the best order to explain these abstractions, from first to last?
-Ideally, first explain those that are the most important or foundational, perhaps user-facing concepts or entry points. Then move to more detailed, lower-level implementation details or supporting concepts.
-
-Output the ordered list of abstraction indices, including the name in a comment for clarity. Use the format `idx # AbstractionName`.
 
 ```yaml
 - 2 # FoundationalConcept
@@ -676,7 +695,22 @@ class WriteChapters(BatchNode):
             tone_note = f" (appropriate for {lang_cap} readers)"
 
         prompt = f"""
-{language_instruction}Write a very beginner-friendly tutorial chapter (in Markdown format) for the project `{project_name}` about the concept: "{abstraction_name}". This is Chapter {chapter_num}.
+You are an expert technical writer and software engineer. Your task is to write a technically accurate, yet beginner-friendly tutorial chapter in Markdown format for the project `{project_name}` about the concept: "{abstraction_name}". This is Chapter {chapter_num}.
+
+Instructions:
+- Ensure all explanations and code are technically correct and precise.
+- Use beginner-friendly language and analogies only if they help clarify, but never sacrifice technical accuracy.
+- Clearly explain technical details, using simple language and concrete examples.
+- Use the provided structure and headings exactly as specified.
+- Each code block must be short (below 20 lines). For longer code, break it into smaller pieces and explain each part.
+- Use comments in code only when they clarify technical details for beginners.
+- Use mermaid diagrams and analogies only to clarify technical concepts, not to replace them.
+- When referencing other abstractions, always use the correct Markdown link and translated chapter title from the tutorial structure.
+- End the chapter with a summary and, if applicable, a transition to the next chapter with a proper Markdown link.
+- Output *only* the Markdown content for this chapter (do NOT use ```markdown code fences).
+
+Context:
+{language_instruction}
 
 Concept Details{concept_details_note}:
 - Name: {abstraction_name}
@@ -692,36 +726,7 @@ Context from previous chapters{prev_summary_note}:
 Relevant Code Snippets (Code itself remains unchanged):
 {file_context_str if file_context_str else "No specific code snippets provided for this abstraction."}
 
-Instructions for the chapter (Generate content in {language.capitalize()} unless specified otherwise):
-- Start with a clear heading (e.g., `# Chapter {chapter_num}: {abstraction_name}`). Use the provided concept name.
-
-- If this is not the first chapter, begin with a brief transition from the previous chapter{instruction_lang_note}, referencing it with a proper Markdown link using its name{link_lang_note}.
-
-- Begin with a high-level motivation explaining what problem this abstraction solves{instruction_lang_note}. Start with a central use case as a concrete example. The whole chapter should guide the reader to understand how to solve this use case. Make it very minimal and friendly to beginners.
-
-- If the abstraction is complex, break it down into key concepts. Explain each concept one-by-one in a very beginner-friendly way{instruction_lang_note}.
-
-- Explain how to use this abstraction to solve the use case{instruction_lang_note}. Give example inputs and outputs for code snippets (if the output isn't values, describe at a high level what will happen{instruction_lang_note}).
-
-- Each code block should be BELOW 10 lines! If longer code blocks are needed, break them down into smaller pieces and walk through them one-by-one. Aggresively simplify the code to make it minimal. Use comments{code_comment_note} to skip non-important implementation details. Each code block should have a beginner friendly explanation right after it{instruction_lang_note}.
-
-- Describe the internal implementation to help understand what's under the hood{instruction_lang_note}. First provide a non-code or code-light walkthrough on what happens step-by-step when the abstraction is called{instruction_lang_note}. It's recommended to use a simple sequenceDiagram with a dummy example - keep it minimal with at most 5 participants to ensure clarity. If participant name has space, use: `participant QP as Query Processing`. {mermaid_lang_note}.
-
-- Then dive deeper into code for the internal implementation with references to files. Provide example code blocks, but make them similarly simple and beginner-friendly. Explain{instruction_lang_note}.
-
-- IMPORTANT: When you need to refer to other core abstractions covered in other chapters, ALWAYS use proper Markdown links like this: [Chapter Title](filename.md). Use the Complete Tutorial Structure above to find the correct filename and the chapter title{link_lang_note}. Translate the surrounding text.
-
-- Use mermaid diagrams to illustrate complex concepts (```mermaid``` format). {mermaid_lang_note}.
-
-- Heavily use analogies and examples throughout{instruction_lang_note} to help beginners understand.
-
-- End the chapter with a brief conclusion that summarizes what was learned{instruction_lang_note} and provides a transition to the next chapter{instruction_lang_note}. If there is a next chapter, use a proper Markdown link: [Next Chapter Title](next_chapter_filename){link_lang_note}.
-
-- Ensure the tone is welcoming and easy for a newcomer to understand{tone_note}.
-
-- Output *only* the Markdown content for this chapter.
-
-Now, directly provide a super beginner-friendly Markdown output (DON'T need ```markdown``` tags):
+Now, directly provide the Markdown output for this chapter:
 """
         chapter_content = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
         # Basic validation/cleanup
