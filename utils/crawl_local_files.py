@@ -1,6 +1,7 @@
 import os
 import fnmatch
 import pathspec
+import git
 
 
 def crawl_local_files(
@@ -11,7 +12,7 @@ def crawl_local_files(
     use_relative_paths=True,
 ):
     """
-    Crawl files in a local directory with similar interface as crawl_github_files.
+    Crawl files in a local directory with similar interface as crawl_git_repo.
     Args:
         directory (str): Path to local directory
         include_patterns (set): File patterns to include (e.g. {"*.py", "*.js"})
@@ -126,7 +127,39 @@ def crawl_local_files(
             rounded_percentage = int(percentage)
             print(f"\033[92mProgress: {processed_files}/{total_files} ({rounded_percentage}%) {relpath} [{status}]\033[0m")
 
-    return {"files": files_dict}
+    # Try to extract git information if directory is a git repository
+    git_info = {
+        "commit_hash": "unknown",
+        "commit_short_hash": "unknown",
+        "commit_message": "unknown",
+        "commit_author": "unknown",
+        "commit_date": "unknown",
+        "repository_url": "local"
+    }
+    
+    try:
+        # Check if directory is a git repository
+        repo = git.Repo(directory, search_parent_directories=True)
+        current_commit = repo.head.commit
+        git_info = {
+            "commit_hash": current_commit.hexsha,
+            "commit_short_hash": current_commit.hexsha[:7],
+            "commit_message": current_commit.message.strip(),
+            "commit_author": str(current_commit.author),
+            "commit_date": current_commit.committed_datetime.isoformat(),
+            "repository_url": "local"
+        }
+        print(f"Local git repository at commit: {git_info['commit_short_hash']} - {git_info['commit_message'][:50]}...")
+    except (git.exc.InvalidGitRepositoryError, git.exc.GitCommandError):
+        # Not a git repository or git command failed
+        pass
+    except Exception as e:
+        print(f"Warning: Could not extract git information: {e}")
+    
+    return {
+        "files": files_dict,
+        "git_info": git_info
+    }
 
 
 if __name__ == "__main__":
