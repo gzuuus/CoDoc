@@ -95,7 +95,7 @@ def crawl_git_repo(
     # Clone repository to temporary directory
     with tempfile.TemporaryDirectory() as temp_dir:
         try:
-            print(f"Cloning repository {repo_url} to temporary directory...")
+            print(f"Cloning repository {repo_url} to temporary directory: {temp_dir}")
             
             # Clone the repository
             repo = git.Repo.clone_from(clone_url, temp_dir, depth=1)

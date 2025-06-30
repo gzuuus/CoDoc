@@ -23,7 +23,10 @@ PROFESSIONAL_TONE_GUIDELINES = """
 ## Style Guidelines
 - Use neutral, encyclopedic tone suitable for technical reference documentation
 - Write in structured, professional language avoiding overly engaging phrases
-- Focus on clarity, accuracy, and comprehensive coverage
+- Be concise and focused: Avoid verbose descriptions that overemphasize component importance
+- Eliminate redundancy: Do not repeat explanations across different sections
+- Maintain proportional coverage: Match explanation depth to actual component significance
+- Focus on clarity, accuracy, essential information, design decisions, architectural patterns, system relationships, and the "why" over "what" (architectural purpose, design rationale)
 - Organize content logically with clear headers and sections
 - Use Markdown formatting consistently
 """
@@ -32,7 +35,6 @@ OUTPUT_FORMAT_INSTRUCTIONS = """
 ## Output Format
 - Provide your response in valid Markdown format
 - Use appropriate headers (##, ###) for section organization
-- Include code blocks with proper language specification when showing code
 - Use bullet points and numbered lists for clarity
 - Ensure all content is well-structured and readable
 """
@@ -74,6 +76,52 @@ def get_common_context(shared):
         "language": shared.get("language", "English"),
         "use_cache": shared.get("use_cache", True)
     }
+
+
+# Helper function to parse YAML from LLM responses with multiple strategies
+def parse_yaml_from_llm_response(response):
+    """Parse YAML from LLM response using multiple fallback strategies.
+    
+    Args:
+        response (str): The LLM response text
+        
+    Returns:
+        dict/list: Parsed YAML data
+        
+    Raises:
+        ValueError: If YAML cannot be parsed with detailed error information
+    """
+    yaml_str = None
+    
+    # Strategy 1: Look for ```yaml code blocks
+    if "```yaml" in response:
+        try:
+            yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
+        except IndexError:
+            pass
+    
+    # Strategy 2: Look for ``` code blocks (without yaml specifier)
+    if yaml_str is None and "```" in response:
+        try:
+            # Find content between first pair of ```
+            parts = response.strip().split("```")
+            if len(parts) >= 3:
+                yaml_str = parts[1].strip()
+                # Remove language specifier if present (e.g., "yaml\n")
+                if yaml_str.startswith(('yaml\n', 'yml\n')):
+                    yaml_str = yaml_str.split('\n', 1)[1]
+        except (IndexError, AttributeError):
+            pass
+    
+    # Strategy 3: Try to parse the entire response as YAML
+    if yaml_str is None:
+        yaml_str = response.strip()
+    
+    # Parse YAML with error handling
+    try:
+        return yaml.safe_load(yaml_str)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Failed to parse YAML from LLM response. YAML Error: {e}\n\nResponse content:\n{response[:500]}...")
 
 
 class FetchRepo(Node):
@@ -150,7 +198,7 @@ class FetchRepo(Node):
 class IdentifyAbstractions(Node):
     def prep(self, shared):
         ctx = get_common_context(shared)
-        max_abstraction_num = shared.get("max_abstraction_num", 21)  # Get max_abstraction_num, default to 10
+        max_abstraction_num = shared.get("max_abstraction_num", 21)
 
         # Helper to create context from files, prioritizing contextual files
         def create_llm_context(files_data):
@@ -241,12 +289,14 @@ You are an expert software architect and technical documentation specialist. You
 
 ## Analysis Instructions
 1. **Start with project context**: If README.md or documentation files are provided, use them to understand the project's main purpose and key components
-2. **Identify 1-{max_abstraction_num} core abstractions** that represent the fundamental building blocks of this codebase
-3. **Prioritize by business/functional importance**: Focus on abstractions that directly serve the project's main purpose rather than supporting utilities
-4. **For monorepos**: Identify abstractions that represent distinct functional areas or services, not just technical layers
-5. **Focus on architectural significance**: main classes, key interfaces, data structures, and core algorithms that drive the system
-6. **Use precise, neutral language**: technical accuracy with accessible explanations
-7. **Ensure comprehensive coverage**: abstractions should collectively represent the system's key functional areas
+2. **Identify 1-{max_abstraction_num} core abstractions**: proportional to the codebase's complexity, that represent the fundamental building blocks of this codebase.
+3. **Prioritize by actual system impact**: Focus on components that are central to the system's core functionality, not peripheral utilities
+4. **Assess relative importance**: Consider how much of the system's behavior depends on each component
+5. **For monorepos**: Identify abstractions that represent distinct functional areas or services, not just technical layers
+6. **Focus on architectural significance**: main classes, key interfaces, data structures, and core algorithms that drive the system
+7. **Avoid over-representing minor components**: Configuration systems, utilities, and helpers should be identified only if they're architecturally significant
+8. **Use precise, neutral language**: technical accuracy with accessible explanations
+9. **Ensure balanced coverage**: abstractions should collectively represent the system's key functional areas with appropriate emphasis
 
 ## Context
 **Project**: `{project_name}`
@@ -284,8 +334,7 @@ Provide your analysis as a YAML list following this exact structure:
         response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))  # Use cache only if enabled and not retrying
 
         # --- Validation ---
-        yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
-        abstractions = yaml.safe_load(yaml_str)
+        abstractions = parse_yaml_from_llm_response(response)
 
         if not isinstance(abstractions, list):
             raise ValueError("LLM Output is not a list")
@@ -425,11 +474,13 @@ You are an expert software architect and technical documentation specialist. You
 - Assume relationships that aren't explicitly demonstrated in the code
 
 ## Analysis Instructions
-1. **Create a comprehensive project summary** that objectively describes what this codebase accomplishes, its primary purpose, and key capabilities
+1. **Create a concise project summary** that objectively describes what this codebase accomplishes, its primary purpose, and key capabilities
 2. **Map concrete relationships** between abstractions based on verifiable code interactions (imports, function calls, inheritance, data flow, configuration)
-3. **Use neutral, encyclopedic tone** - precise technical language that remains accessible
-4. **Focus on architectural clarity** - provide a clear mental model of the system's structure
-5. **Ensure complete coverage** - every abstraction should be connected to the overall system design
+3. **Prioritize significant relationships** - focus on connections that are architecturally important, not every minor interaction
+4. **Use neutral, encyclopedic tone** - precise technical language that remains accessible
+5. **Focus on architectural clarity** - provide a clear mental model of the system's structure
+6. **Maintain proportional emphasis** - give more attention to core system relationships, less to peripheral connections
+7. **Ensure complete coverage** - every abstraction should be connected to the overall system design
 
 ## Context
 **Project**: `{project_name}`
@@ -443,7 +494,7 @@ You are an expert software architect and technical documentation specialist. You
 Provide a YAML response with two sections:
 
 ### 1. Project Summary
-Write a concise overview explaining what this project does, its main purpose, and key functionality. Use **bold** and *italic* markdown for emphasis.
+Write a concise overview explaining what this project does, its main purpose, and key functionality. Focus on essential information only. Use **bold** and *italic* markdown for emphasis.
 
 ### 2. Relationships
 List relationships between abstractions based on actual code interactions. Each relationship must specify:
@@ -479,8 +530,7 @@ relationships:
         response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
 
         # --- Validation ---
-        yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
-        relationships_data = yaml.safe_load(yaml_str)
+        relationships_data = parse_yaml_from_llm_response(response)
 
         if not isinstance(relationships_data, dict) or not all(
             k in relationships_data for k in ["summary", "relationships"]
@@ -610,7 +660,8 @@ Apply these principles to create a **logical reference structure** that serves d
 4. **Business Logic**: Include domain-specific functionality, algorithms, and processing components
 5. **Data Management**: Present data structures, models, and persistence layers
 6. **Supporting Infrastructure**: Include configuration, utilities, and helper components
-7. **Reference Logic**: Order for comprehensive understanding while enabling easy navigation and cross-referencing
+7. **Proportional Emphasis**: Order components based on their actual importance to the system's core functionality
+8. **Reference Logic**: Order for comprehensive understanding
 
 ## Context
 **Project**: `{project_name}`
@@ -627,8 +678,10 @@ Provide a YAML list with the optimal organization for presenting these abstracti
 - Which abstractions serve as the primary system interfaces or entry points?
 - What are the fundamental architectural components that define the system?
 - Which abstractions contain the core domain logic and business functionality?
-- What supporting infrastructure and utilities enable the main functionality?
-- How should components be ordered for effective cross-referencing and navigation?
+- What supporting infrastructure is architecturally significant (avoid over-emphasizing minor utilities)?
+- How much of the system's behavior depends on each component?
+- How should components be ordered to reflect their actual importance to the system?
+- How can the organization enable effective cross-referencing without redundant coverage?
 
 ## Output Format
 ```yaml
@@ -642,8 +695,7 @@ Provide a YAML list with the optimal organization for presenting these abstracti
         response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
 
         # --- Validation ---
-        yaml_str = response.strip().split("```yaml")[1].split("```")[0].strip()
-        ordered_indices_raw = yaml.safe_load(yaml_str)
+        ordered_indices_raw = parse_yaml_from_llm_response(response)
 
         if not isinstance(ordered_indices_raw, list):
             raise ValueError("LLM output is not a list")
@@ -839,6 +891,13 @@ You are an expert software architect and technical documentation specialist. You
 - Add code examples that don't exist in the provided context
 - Reference files, functions, or classes not present in the code snippets
 - Create hypothetical scenarios or use cases not supported by the actual code
+- Repeat detailed explanations already covered in other wiki articles
+- Over-explain concepts that are peripheral to this component's core functionality
+
+**IMPORTANT**: Focus on:
+- Architectural purpose and design rationale
+- How this component solves specific problems in the system
+- Avoid repeating explanations from other articles
 
 {PROFESSIONAL_TONE_GUIDELINES}
 
@@ -863,16 +922,43 @@ You are an expert software architect and technical documentation specialist. You
 Your article must include:
 
 1. **Article Title**: `# {abstraction_name}`
-2. **Overview**: Comprehensive explanation of the component's purpose and role
-3. **Architecture**: Description of the component's design and structure
-4. **Implementation**: Detailed walkthrough of the actual code provided
-5. **Key Components**: Explanation of important classes, functions, and methods
-6. **Usage Patterns**: How this component is utilized within the system
-7. **Relationships**: Connections to other system components (based on actual code)
-8. **Technical Details**: Important implementation specifics and considerations
-9. **See Also**: References to related wiki articles (if applicable)
+2. **Overview**: 
+   - Concise explanation of the component's purpose
+   - Why this component exists and what problem it solves
 
-## Code Presentation Rules
+3. **Architecture**: 
+   - Design decisions and architectural patterns used
+   - Brief description of the component's design and structure
+
+4. **Role in System**: 
+   - How this component fits into the overall system design
+   - Primary usage scenarios within the system
+
+5. **Key Components**:
+   - Essential classes, functions, and methods
+   - Primary functions and responsibilities
+
+6. **Relationships and Interactions**:
+   - Direct connections to other components
+   - How it connects to and collaborates with other components
+
+7. **Design Rationale**:
+   - Why it was designed this way
+   - Critical implementation specifics
+
+8. **Implementation Technical Details**: 
+   - Focused walkthrough of key code elements
+   - Critical implementation specifics only
+
+9. **See Also**: 
+   - References to related wiki articles (if applicable)
+
+
+**Content Guidelines**:
+- Keep each section focused and proportional to the component's actual importance
+- Focus on what makes this component architecturally significant, not general programming concepts
+
+## Code Presentation Rules (if applicable)
 - Keep code blocks under 20 lines
 - Only show code that exists in the provided context
 - Add minimal comments only when they clarify complex logic
@@ -881,7 +967,6 @@ Your article must include:
 
 ## Output Format
 Provide ONLY the Markdown content (no code fences around the entire output).
-
 **Remember**: Every code example, function reference, and technical detail must be based on the actual code provided in the context above."""
         chapter_content = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0)) # Use cache only if enabled and not retrying
         # Basic validation/cleanup
@@ -1198,17 +1283,17 @@ The following Mermaid diagram shows the relationships between core components:
 ```
 
 ## Your Task
-Create a comprehensive index page that serves as the definitive entry point for developers. The index should be authoritative, informative, and provide clear navigation to all aspects of this codebase.
+Create a concise, well-structured index page that serves as the entry point for developers. The index should be informative and provide clear navigation while maintaining proportional emphasis on components based on their actual importance.
 
 ## Required Sections
-1. **Project Title and Brief Description**
+1. **Project Title**
 2. **📊 Generation Metadata** - Include the generation metadata provided above (generation date, repository, commit info, license, etc.)
 3. **🎯 What This Project Does** - Clear value proposition and primary functionality
 4. **📁 Repository Structure** - Analyze the directory structure to determine if this is a monorepo, library, application, or other type. Include key insights about organization.
-5. **🏗️ Architecture Overview** - High-level design and key architectural patterns
-6. **🛠️ Technology Stack** - Languages, frameworks, tools used (analyze from file extensions and config files)
+5. **🏗️ Architecture Overview** - High-level design and key architectural patterns (focus on essential patterns only)
+6. **🛠️ Technology Stack** - Primary languages dependencies, frameworks, tools
 7. **📋 Core Components** - Brief overview of main abstractions and their roles
-8. **🗺️ Component Relationships** - Include the Mermaid diagram with detailed explanation
+8. **🗺️ Component Relationships** - Include the Mermaid diagram with focused explanation
 9. **📚 Wiki Articles** - Navigation to detailed component documentation
 
 ## Critical Requirements
@@ -1217,6 +1302,9 @@ Create a comprehensive index page that serves as the definitive entry point for 
 **Additional Guidelines**:
 - **Use project documentation**: If README.md or other documentation is provided above, use it to understand the project's main purpose, goals, and key features
 - **Prioritize functional importance**: Focus on components that directly serve the project's main purpose rather than supporting utilities
+- **Maintain proportional emphasis**: Give more attention to core system components, less to peripheral utilities
+- **Avoid redundancy**: Don't repeat information across sections - each section should provide unique value
+- **Be concise and focused**: Avoid verbose descriptions that overemphasize component importance
 - **Structured, professional tone**: Avoid overly engaging language like "Welcome to the definitive...". Use clear, direct, and structured language
 - Use **section emojis** for navigation while maintaining professional tone
 - **Do NOT** make assumptions about deployment, hosting, or infrastructure not shown in the files
