@@ -2,9 +2,36 @@ import os
 import tempfile
 import shutil
 import fnmatch
+import hashlib
 import git
 from typing import Union, Set, List, Dict, Tuple, Any
 from urllib.parse import urlparse
+
+
+def get_repo_cache_dir(repo_url: str, branch: str = None) -> str:
+    """
+    Generate a deterministic cache directory name based on repository URL and branch.
+    
+    Args:
+        repo_url (str): Repository URL
+        branch (str, optional): Branch name to include in hash
+        
+    Returns:
+        str: Path to cache directory
+    """
+    # Create a unique identifier from repo URL and branch
+    cache_key = repo_url
+    if branch:
+        cache_key += f"#{branch}"
+    
+    # Create hash of the cache key
+    repo_hash = hashlib.md5(cache_key.encode()).hexdigest()[:12]
+    
+    # Create cache directory path
+    cache_base = os.path.join(tempfile.gettempdir(), "git_repo_cache")
+    cache_dir = os.path.join(cache_base, f"repo_{repo_hash}")
+    
+    return cache_dir
 
 
 def crawl_git_repo(
@@ -92,109 +119,113 @@ def crawl_git_repo(
     files = {}
     skipped_files = []
 
-    # Clone repository to temporary directory
-    with tempfile.TemporaryDirectory() as temp_dir:
+    # Get cache directory for this repository
+    cache_dir = get_repo_cache_dir(repo_url, branch)
+    
+    # Check if repository is already cached
+    if os.path.exists(cache_dir):
+        print(f"Using cached repository at: {cache_dir}")
+        repo = git.Repo(cache_dir)
+    else:
+        print(f"Cloning repository {repo_url} to cache directory: {cache_dir}")
+        repo = git.Repo.clone_from(clone_url, cache_dir, depth=1)
+    
+    # Checkout specific branch/commit if specified
+    if branch:
         try:
-            print(f"Cloning repository {repo_url} to temporary directory: {temp_dir}")
-            
-            # Clone the repository
-            repo = git.Repo.clone_from(clone_url, temp_dir, depth=1)
-            
-            # Checkout specific branch/commit if specified
-            if branch:
-                try:
-                    repo.git.checkout(branch)
-                    print(f"Checked out branch/commit: {branch}")
-                except git.exc.GitCommandError as e:
-                    print(f"Warning: Could not checkout {branch}: {e}")
-                    print("Continuing with default branch...")
-            
-            # Extract commit information
-            try:
-                current_commit = repo.head.commit
-                commit_hash = current_commit.hexsha
-                commit_short_hash = current_commit.hexsha[:7]
-                commit_message = current_commit.message.strip()
-                commit_author = str(current_commit.author)
-                commit_date = current_commit.committed_datetime.isoformat()
-                print(f"Repository at commit: {commit_short_hash} - {commit_message[:50]}...")
-            except Exception as e:
-                print(f"Warning: Could not extract commit information: {e}")
-                commit_hash = "unknown"
-                commit_short_hash = "unknown"
-                commit_message = "unknown"
-                commit_author = "unknown"
-                commit_date = "unknown"
-
-            # Determine the directory to crawl
-            crawl_dir = temp_dir
-            if subdirectory:
-                subdirectory_path = os.path.join(temp_dir, subdirectory)
-                if os.path.exists(subdirectory_path):
-                    crawl_dir = subdirectory_path
-                    print(f"Crawling subdirectory: {subdirectory}")
-                else:
-                    print(f"Warning: Subdirectory '{subdirectory}' not found, crawling entire repository")
-
-            # Walk through the directory and collect files
-            for root, dirs, filenames in os.walk(crawl_dir):
-                # Skip .git directory
-                if '.git' in dirs:
-                    dirs.remove('.git')
-                
-                for filename in filenames:
-                    abs_path = os.path.join(root, filename)
-                    
-                    # Calculate relative path
-                    if use_relative_paths and subdirectory:
-                        # Relative to subdirectory
-                        rel_path = os.path.relpath(abs_path, crawl_dir)
-                    else:
-                        # Relative to repository root
-                        rel_path = os.path.relpath(abs_path, temp_dir)
-                        if subdirectory and rel_path.startswith(subdirectory):
-                            # If we're in a subdirectory but not using relative paths,
-                            # keep the subdirectory in the path
-                            pass
-
-                    # Check file size
-                    try:
-                        file_size = os.path.getsize(abs_path)
-                    except OSError:
-                        continue
-
-                    if file_size > max_file_size:
-                        skipped_files.append((rel_path, file_size))
-                        print(f"Skipping {rel_path}: size {file_size} exceeds limit {max_file_size}")
-                        continue
-
-                    # Check include/exclude patterns
-                    if not should_include_file(rel_path, filename):
-                        continue
-
-                    # Read file content
-                    try:
-                        with open(abs_path, "r", encoding="utf-8-sig") as f:
-                            content = f.read()
-                        files[rel_path] = content
-                        print(f"Added {rel_path} ({file_size} bytes)")
-                    except Exception as e:
-                        print(f"Failed to read {rel_path}: {e}")
-
+            repo.git.checkout(branch)
+            print(f"Checked out branch/commit: {branch}")
         except git.exc.GitCommandError as e:
-            error_msg = f"Failed to clone repository: {e}"
-            print(error_msg)
-            return {
-                "files": {},
-                "stats": {
-                    "error": error_msg,
-                    "downloaded_count": 0,
-                    "skipped_count": 0,
-                    "skipped_files": [],
-                    "base_path": subdirectory if use_relative_paths else None,
-                    "include_patterns": include_patterns,
-                    "exclude_patterns": exclude_patterns,
-                    "source": "git_clone"
+            print(f"Warning: Could not checkout {branch}: {e}")
+            print("Continuing with default branch...")
+    
+    # Extract commit information
+    try:
+        current_commit = repo.head.commit
+        commit_hash = current_commit.hexsha
+        commit_short_hash = current_commit.hexsha[:7]
+        commit_message = current_commit.message.strip()
+        commit_author = str(current_commit.author)
+        commit_date = current_commit.committed_datetime.isoformat()
+        print(f"Repository at commit: {commit_short_hash} - {commit_message[:50]}...")
+    except Exception as e:
+        print(f"Warning: Could not extract commit information: {e}")
+        commit_hash = "unknown"
+        commit_short_hash = "unknown"
+        commit_message = "unknown"
+        commit_author = "unknown"
+        commit_date = "unknown"
+
+    # Determine the directory to crawl
+    crawl_dir = cache_dir
+    if subdirectory:
+        subdirectory_path = os.path.join(cache_dir, subdirectory)
+        if os.path.exists(subdirectory_path):
+            crawl_dir = subdirectory_path
+            print(f"Crawling subdirectory: {subdirectory}")
+        else:
+            print(f"Warning: Subdirectory '{subdirectory}' not found, crawling entire repository")
+
+    # Walk through the directory and collect files
+    try:
+        for root, dirs, filenames in os.walk(crawl_dir):
+            # Skip .git directory
+            if '.git' in dirs:
+                dirs.remove('.git')
+            
+            for filename in filenames:
+                abs_path = os.path.join(root, filename)
+                
+                # Calculate relative path
+                if use_relative_paths and subdirectory:
+                    # Relative to subdirectory
+                    rel_path = os.path.relpath(abs_path, crawl_dir)
+                else:
+                    # Relative to repository root
+                    rel_path = os.path.relpath(abs_path, cache_dir)
+                    if subdirectory and rel_path.startswith(subdirectory):
+                        # If we're in a subdirectory but not using relative paths,
+                        # keep the subdirectory in the path
+                        pass
+
+                # Check file size
+                try:
+                    file_size = os.path.getsize(abs_path)
+                except OSError:
+                    continue
+
+                if file_size > max_file_size:
+                    skipped_files.append((rel_path, file_size))
+                    print(f"Skipping {rel_path}: size {file_size} exceeds limit {max_file_size}")
+                    continue
+
+                # Check include/exclude patterns
+                if not should_include_file(rel_path, filename):
+                    continue
+
+                # Read file content
+                try:
+                    with open(abs_path, "r", encoding="utf-8-sig") as f:
+                        content = f.read()
+                    files[rel_path] = content
+                    print(f"Added {rel_path} ({file_size} bytes)")
+                except Exception as e:
+                    print(f"Failed to read {rel_path}: {e}")
+    
+    except git.exc.GitCommandError as e:
+        error_msg = f"Failed to clone repository: {e}"
+        print(error_msg)
+        return {
+            "files": {},
+            "stats": {
+                "error": error_msg,
+                "downloaded_count": 0,
+                "skipped_count": 0,
+                "skipped_files": [],
+                "base_path": subdirectory if use_relative_paths else None,
+                "include_patterns": include_patterns,
+                "exclude_patterns": exclude_patterns,
+                "source": "git_clone"
                 },
                 "git_info": {
                     "commit_hash": "unknown",
@@ -205,16 +236,16 @@ def crawl_git_repo(
                     "repository_url": repo_url
                 }
             }
-        except Exception as e:
-            error_msg = f"Unexpected error: {e}"
-            print(error_msg)
-            return {
-                "files": {},
-                "stats": {
-                    "error": error_msg,
-                    "downloaded_count": 0,
-                    "skipped_count": 0,
-                    "skipped_files": [],
+    except Exception as e:
+        error_msg = f"Unexpected error: {e}"
+        print(error_msg)
+        return {
+            "files": {},
+            "stats": {
+                "error": error_msg,
+                "downloaded_count": 0,
+                "skipped_count": 0,
+                "skipped_files": [],
                     "base_path": subdirectory if use_relative_paths else None,
                     "include_patterns": include_patterns,
                     "exclude_patterns": exclude_patterns,

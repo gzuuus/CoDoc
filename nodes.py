@@ -124,6 +124,128 @@ def parse_yaml_from_llm_response(response):
         raise ValueError(f"Failed to parse YAML from LLM response. YAML Error: {e}\n\nResponse content:\n{response[:500]}...")
 
 
+# Shared repository type detection function
+def detect_repository_type(files_data):
+    """Detect repository type based on file patterns and directory structure"""
+    paths = [path for path, _ in files_data]
+    root_dirs = set()
+    config_files = set()
+    
+    # Extract root directories and config files
+    for path in paths:
+        parts = path.split('/')
+        if len(parts) > 1:
+            root_dirs.add(parts[0])
+        filename = parts[-1].lower()
+        config_files.add(filename)
+    
+    # Enhanced detection patterns
+    # Monorepo indicators
+    monorepo_dirs = {'packages', 'apps', 'services', 'libs', 'modules', 'projects', 'workspaces', 'components'}
+    monorepo_configs = {'lerna.json', 'nx.json', 'pnpm-workspace.yaml', 'rush.json', 'workspace.json', 'yarn.lock'}
+    
+    # Library/Package indicators
+    package_configs = {'setup.py', 'pyproject.toml', 'package.json', 'cargo.toml', 'composer.json', 'pom.xml', 'go.mod', 'gemspec'}
+    library_dirs = {'src', 'lib', 'pkg'}
+    
+    # Application indicators
+    app_entries = {'main.py', 'app.py', 'index.js', 'server.js', 'main.go', 'main.rs', 'app.js', 'index.html'}
+    app_configs = {'dockerfile', 'docker-compose.yml', 'requirements.txt', 'pipfile', 'procfile'}
+    deployment_dirs = {'deploy', 'deployment', 'k8s', 'helm'}
+    
+    # Framework/Tool indicators
+    framework_patterns = {'cli', 'plugin', 'extension', 'template', 'generator', 'scaffold'}
+    framework_configs = {'bin', 'scripts'}
+    
+    # Documentation indicators
+    doc_patterns = {'docs', 'documentation', 'examples', 'tutorials', 'guides', 'wiki', 'book'}
+    doc_configs = {'mkdocs.yml', 'docusaurus.config.js', '_config.yml', 'gitbook.json'}
+    
+    # Infrastructure indicators
+    infra_patterns = {'.github', '.gitlab-ci.yml', 'terraform', 'ansible', 'kubernetes', 'k8s', 'helm', 'charts'}
+    infra_configs = {'terraform.tf', 'ansible.yml', 'docker-compose.yml', '.travis.yml', '.circleci'}
+    
+    # Enhanced detection logic with scoring
+    monorepo_score = len(monorepo_dirs.intersection(root_dirs)) * 2 + len(monorepo_configs.intersection(config_files))
+    library_score = len(package_configs.intersection(config_files)) + (1 if library_dirs.intersection(root_dirs) else 0)
+    app_score = len([f for f in app_entries if f in config_files]) + len(app_configs.intersection(config_files)) + len(deployment_dirs.intersection(root_dirs))
+    framework_score = len(framework_patterns.intersection(root_dirs)) + len(framework_configs.intersection(root_dirs)) + len([p for p in paths if 'cli' in p.lower()])
+    doc_score = len(doc_patterns.intersection(root_dirs)) + len(doc_configs.intersection(config_files))
+    infra_score = len(infra_patterns.intersection(root_dirs)) + len(infra_configs.intersection(config_files))
+    
+    # Determine type based on highest score
+    scores = {
+        'monorepo': monorepo_score,
+        'library': library_score,
+        'application': app_score,
+        'framework': framework_score,
+        'documentation': doc_score,
+        'infrastructure': infra_score
+    }
+    
+    max_score = max(scores.values())
+    if max_score == 0:
+        return "mixed"
+    
+    # Return the type with highest score
+    return max(scores, key=scores.get)
+
+
+# Extract documentation context from various sources
+def extract_documentation_context(files_data):
+    """Extract valuable context from documentation files and directories"""
+    doc_context = {
+        'readme_content': '',
+        'architecture_docs': [],
+        'api_docs': [],
+        'design_docs': [],
+        'contributing_guides': [],
+        'docs_structure': []
+    }
+    
+    for path, content in files_data:
+        path_lower = path.lower()
+        filename = os.path.basename(path_lower)
+        
+        # README files
+        if filename.startswith('readme'):
+            doc_context['readme_content'] = content[:2000]  # First 2000 chars for context
+        
+        # Architecture documentation
+        elif any(term in path_lower for term in ['architecture', 'arch', 'design', 'adr']):
+            doc_context['architecture_docs'].append({
+                'path': path,
+                'content': content[:1000]  # First 1000 chars
+            })
+        
+        # API documentation
+        elif any(term in path_lower for term in ['api', 'swagger', 'openapi']):
+            doc_context['api_docs'].append({
+                'path': path,
+                'content': content[:1000]
+            })
+        
+        # Design documents
+        elif any(term in filename for term in ['design', 'spec', 'specification']):
+            doc_context['design_docs'].append({
+                'path': path,
+                'content': content[:1000]
+            })
+        
+        # Contributing guides
+        elif any(term in filename for term in ['contributing', 'development', 'dev-guide']):
+            doc_context['contributing_guides'].append({
+                'path': path,
+                'content': content[:1000]
+            })
+        
+        # Documentation structure (files in docs directories)
+        elif '/docs/' in path_lower or path_lower.startswith('docs/'):
+            doc_context['docs_structure'].append(path)
+    
+    return doc_context
+
+
 class FetchRepo(Node):
     def prep(self, shared):
         repo_url = shared.get("repo_url")
@@ -198,7 +320,7 @@ class FetchRepo(Node):
 class IdentifyAbstractions(Node):
     def prep(self, shared):
         ctx = get_common_context(shared)
-        max_abstraction_num = shared.get("max_abstraction_num", 21)
+        max_abstraction_num = shared.get("max_abstraction_num", 20)
 
         # Helper to create context from files, prioritizing contextual files
         def create_llm_context(files_data):
@@ -239,6 +361,10 @@ class IdentifyAbstractions(Node):
         file_listing_for_prompt = "\n".join(
             [f"- {idx} # {path}" for idx, path in file_info]
         )
+        # Detect repository type and extract documentation context for better guidance
+        repo_type = detect_repository_type(ctx["files_data"])
+        doc_context = extract_documentation_context(ctx["files_data"])
+        
         return (
             context,
             file_listing_for_prompt,
@@ -248,6 +374,8 @@ class IdentifyAbstractions(Node):
             ctx["use_cache"],
             max_abstraction_num,
             contextual_file_count,
+            repo_type,
+            doc_context,
         )  # Return all parameters
 
     def exec(self, prep_res):
@@ -260,6 +388,8 @@ class IdentifyAbstractions(Node):
             use_cache,
             max_abstraction_num,
             contextual_file_count,
+            repo_type,
+            doc_context,
         ) = prep_res  # Unpack all parameters
         print(f"Identifying abstractions using LLM...")
 
@@ -276,7 +406,7 @@ class IdentifyAbstractions(Node):
 
         prompt = f"""
 ## Role and Task
-You are an expert software architect and technical documentation specialist. Your task is to identify the most important code abstractions in this repository for comprehensive wiki documentation that serves as a definitive reference for developers.
+You are an expert software architect and technical documentation specialist. Your task is to systematically identify the core code abstractions in this repository for comprehensive wiki documentation that serves as a definitive reference for developers.
 
 ## Critical Requirements
 {STRICT_ACCURACY_REQUIREMENTS}
@@ -287,16 +417,36 @@ You are an expert software architect and technical documentation specialist. You
 - Mention concepts not directly implemented in the provided codebase
 - Assume functionality that isn't clearly evident from the code
 
-## Analysis Instructions
-1. **Start with project context**: If README.md or documentation files are provided, use them to understand the project's main purpose and key components
-2. **Identify 1-{max_abstraction_num} core abstractions**: proportional to the codebase's complexity, that represent the fundamental building blocks of this codebase.
-3. **Prioritize by actual system impact**: Focus on components that are central to the system's core functionality, not peripheral utilities
-4. **Assess relative importance**: Consider how much of the system's behavior depends on each component
-5. **For monorepos**: Identify abstractions that represent distinct functional areas or services, not just technical layers
-6. **Focus on architectural significance**: main classes, key interfaces, data structures, and core algorithms that drive the system
-7. **Avoid over-representing minor components**: Configuration systems, utilities, and helpers should be identified only if they're architecturally significant
-8. **Use precise, neutral language**: technical accuracy with accessible explanations
-9. **Ensure balanced coverage**: abstractions should collectively represent the system's key functional areas with appropriate emphasis
+## Systematic Analysis Process
+
+### Step 1: Project Context Analysis
+- If README.md or documentation files are provided, extract the project's stated purpose and key components
+- Identify the primary domain/problem space the codebase addresses
+- Note any explicitly mentioned architectural patterns or design principles
+
+### Step 2: Abstraction Identification Criteria
+Identify abstractions that meet **at least 2** of these concrete criteria:
+
+**Primary Criteria (High Priority)**:
+- **Entry Points**: Main classes, functions, or modules that serve as system entry points
+- **Data Models**: Core data structures, entities, or domain objects that represent key business concepts
+- **Processing Engines**: Components that perform the system's primary computational or business logic
+- **Interface Boundaries**: Public APIs, service interfaces, or integration points with external systems
+- **State Management**: Components responsible for managing application state, persistence, or configuration
+
+**Secondary Criteria (Medium Priority)**:
+- **Workflow Orchestration**: Components that coordinate multiple operations or manage process flows
+- **Extension Points**: Plugin systems, hooks, or customization interfaces
+- **Resource Management**: Components handling files, network, databases, or other system resources
+- **Cross-Cutting Concerns**: Logging, security, validation, or monitoring systems (only if architecturally significant)
+
+### Step 3: Repository-Type-Specific Focus
+**Repository Type: {repo_type.title()}**
+- **Monorepos**: Prioritize distinct functional domains, services, or packages over technical layers
+- **Libraries/Packages**: Focus on public APIs, core algorithms, and main user-facing interfaces
+- **Applications**: Emphasize business logic, data models, and user-facing features over infrastructure
+- **Frameworks/Tools**: Highlight extensibility points, plugin systems, and core processing engines
+- **Mixed repositories**: Identify primary purpose first, then apply appropriate strategy
 
 ## Context
 **Project**: `{project_name}`
@@ -304,6 +454,10 @@ You are an expert software architect and technical documentation specialist. You
 {file_listing_for_prompt}
 
 **Contextual Guidance**: {'This repository includes documentation files (README, guides, etc.) that provide important context about the project\'s purpose and structure. Use this information to prioritize abstractions that align with the project\'s main goals.' if contextual_file_count > 0 else 'No documentation files detected. Focus on identifying abstractions based on code structure, imports, and apparent functionality patterns.'}
+
+**Documentation Context**: {f'README content available - use it to understand project goals and key components. ' if doc_context['readme_content'] else ''}{f'Architecture docs found ({len(doc_context["architecture_docs"])}) - leverage for system design insights. ' if doc_context['architecture_docs'] else ''}{f'API documentation available ({len(doc_context["api_docs"])}) - prioritize documented interfaces. ' if doc_context['api_docs'] else ''}{f'Design documents found ({len(doc_context["design_docs"])}) - use for understanding intended abstractions. ' if doc_context['design_docs'] else ''}{f'Documentation structure in /docs/ directory - consider documented components as higher priority.' if doc_context['docs_structure'] else 'No structured documentation directory found.'}
+
+**Repository Type**: {repo_type.title()} - {'Focus on distinct functional areas and services across multiple packages/modules.' if repo_type == 'monorepo' else 'Focus on public APIs, core algorithms, and main interfaces that users interact with.' if repo_type == 'library' else 'Prioritize business logic components, data models, and user-facing features over infrastructure.' if repo_type == 'application' else 'Emphasize extensibility points, plugin systems, and core processing engines.' if repo_type == 'framework' else 'Focus on content organization, generation systems, and publishing workflows.' if repo_type == 'documentation' else 'Focus on deployment configurations, infrastructure components, and automation systems.' if repo_type == 'infrastructure' else 'Analyze the primary purpose first, then apply appropriate abstraction strategy.'}
 
 ## Codebase to Analyze
 {context}
@@ -315,16 +469,16 @@ Provide your analysis as a YAML list following this exact structure:
 - name: |
     Core Authentication System{name_lang_hint}
   description: |
-    Handles user login, session management, and access control throughout the application.
-    Think of it as the security checkpoint that validates who can access what resources.{desc_lang_hint}
+    Manages user authentication, session handling, and access control across the application.
+    Serves as the central security gateway that validates user credentials and permissions.{desc_lang_hint}
   file_indices:
     - 0 # auth/login.py
     - 2 # middleware/auth.py
 - name: |
     Data Processing Pipeline{name_lang_hint}
   description: |
-    Transforms raw input data through multiple stages before storage or output.
-    Works like an assembly line where each stage adds or modifies the data.{desc_lang_hint}
+    Transforms raw input data through multiple validation and processing stages.
+    Acts as the core data transformation engine that ensures data quality and format consistency.{desc_lang_hint}
   file_indices:
     - 1 # processors/main.py
     - 4 # utils/transform.py
@@ -430,6 +584,10 @@ class AnalyzeRelationships(Node):
             for idx_path, content in relevant_files_content_map.items()
         )
         context += file_context_str
+        
+        # Detect repository type and extract documentation context for better analysis
+        repo_type = detect_repository_type(ctx["files_data"])
+        doc_context = extract_documentation_context(ctx["files_data"])
 
         return (
             context,
@@ -438,7 +596,9 @@ class AnalyzeRelationships(Node):
             ctx["project_name"],
             ctx["language"],
             ctx["use_cache"],
-        )  # Return use_cache
+            repo_type,
+            doc_context,
+        )  # Return use_cache and new context
 
     def exec(self, prep_res):
         (
@@ -448,7 +608,9 @@ class AnalyzeRelationships(Node):
             project_name,
             language,
             use_cache,
-         ) = prep_res  # Unpack use_cache
+            repo_type,
+            doc_context,
+         ) = prep_res  # Unpack use_cache and new context
         print(f"Analyzing relationships using LLM...")
 
         # Add language instruction and hints only if not English
@@ -484,6 +646,10 @@ You are an expert software architect and technical documentation specialist. You
 
 ## Context
 **Project**: `{project_name}`
+**Repository Type**: {repo_type.title()} - {'Focus on relationships between distinct functional areas and services across multiple packages/modules.' if repo_type == 'monorepo' else 'Emphasize public API relationships, core algorithm interactions, and main interface connections.' if repo_type == 'library' else 'Prioritize business logic relationships, data flow between models, and user-facing feature connections.' if repo_type == 'application' else 'Focus on extensibility relationships, plugin system connections, and core processing engine interactions.' if repo_type == 'framework' else 'Emphasize content organization relationships, generation system connections, and publishing workflow interactions.' if repo_type == 'documentation' else 'Focus on deployment relationships, infrastructure component connections, and automation system interactions.' if repo_type == 'infrastructure' else 'Analyze the primary relationships first, then apply appropriate connection strategy.'}
+
+**Documentation Context**: {f'README content available - use it to understand project goals and key component relationships. ' if doc_context['readme_content'] else ''}{f'Architecture docs found ({len(doc_context["architecture_docs"])}) - leverage for system design relationships. ' if doc_context['architecture_docs'] else ''}{f'API documentation available ({len(doc_context["api_docs"])}) - prioritize documented interface relationships. ' if doc_context['api_docs'] else ''}{f'Design documents found ({len(doc_context["design_docs"])}) - use for understanding intended component relationships. ' if doc_context['design_docs'] else ''}{f'Documentation structure in /docs/ directory - consider documented component relationships as higher priority.' if doc_context['docs_structure'] else 'No structured documentation directory found.'}
+
 **Identified Abstractions**{list_lang_note}:
 {abstraction_listing}
 
@@ -1002,6 +1168,10 @@ class CombineTutorial(Node):
         output_path = os.path.join(output_base_dir, ctx["project_name"])
         repo_url = shared.get("repo_url")  # Get the repository URL
         
+        # Detect repository type and extract documentation context for better categorization
+        repo_type = detect_repository_type(ctx["files_data"])
+        doc_context = extract_documentation_context(ctx["files_data"])
+        
         # Extract README.md, license, and other contextual information
         readme_content = ""
         license_content = ""
@@ -1119,7 +1289,7 @@ class CombineTutorial(Node):
         
         # --- Generate comprehensive index content using LLM ---
         index_content = self._generate_comprehensive_index(
-            ctx["project_name"], relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context, metadata
+            ctx["project_name"], relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context, metadata, repo_type
         )
 
         return {
@@ -1128,7 +1298,7 @@ class CombineTutorial(Node):
             "chapter_files": chapter_files,  # List of {"filename": str, "content": str}
         }
 
-    def _generate_comprehensive_index(self, project_name, relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context="", metadata=None):
+    def _generate_comprehensive_index(self, project_name, relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context="", metadata=None, repo_type="mixed"):
         """Generate a comprehensive index with project overview, tech stack, architecture, and design insights."""
         
         # Get file information for tech stack analysis
@@ -1263,6 +1433,8 @@ You are an expert technical documentation specialist and software architect. You
 ## Directory Structure
 {directory_tree}
 
+**Detected Repository Type:** {repo_type.title()}
+
 ## Core Abstractions
 {abstractions_context}
 
@@ -1289,7 +1461,10 @@ Create a concise, well-structured index page that serves as the entry point for 
 1. **Project Title**
 2. **📊 Generation Metadata** - Include the generation metadata provided above (generation date, repository, commit info, license, etc.)
 3. **🎯 What This Project Does** - Clear value proposition and primary functionality
-4. **📁 Repository Structure** - Analyze the directory structure to determine if this is a monorepo, library, application, or other type. Include key insights about organization.
+4. **📁 Repository Structure** - This is a **{repo_type.title()}** repository. Analyze the directory structure focusing on:
+   {'- Multiple distinct functional areas and how they are organized across packages/modules\n   - Key services or applications and their separation of concerns\n   - Shared libraries and common utilities' if repo_type == 'monorepo' else '- Public API structure and main entry points\n   - Core library organization and module hierarchy\n   - Distribution and packaging approach' if repo_type == 'library' else '- Application entry points and main execution flow\n   - Business logic organization and feature structure\n   - Configuration and deployment setup' if repo_type == 'application' else '- Extensibility mechanisms and plugin architecture\n   - CLI interfaces and developer tools\n   - Core processing engines and framework components' if repo_type == 'framework' else '- Content organization and documentation structure\n   - Example code and tutorial progression\n   - Publishing and generation workflows' if repo_type == 'documentation' else '- Infrastructure components and deployment configurations\n   - Automation systems and CI/CD pipelines\n   - Environment management and orchestration' if repo_type == 'infrastructure' else '- Primary purpose and main organizational patterns\n   - Key functional areas and their relationships\n   - Overall architecture and design approach'}
+   
+   Provide key insights about the organization and structure without repeating the type classification.
 5. **🏗️ Architecture Overview** - High-level design and key architectural patterns (focus on essential patterns only)
 6. **🛠️ Technology Stack** - Primary languages dependencies, frameworks, tools
 7. **📋 Core Components** - Brief overview of main abstractions and their roles
