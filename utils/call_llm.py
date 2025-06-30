@@ -51,7 +51,7 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "text"},
-            temperature=0.5
+            temperature=0.5,
         )
         response_text = r.choices[0].message.content
     except Exception as e:

@@ -10,7 +10,7 @@ dotenv.load_dotenv()
 DEFAULT_INCLUDE_PATTERNS = {
     "*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.go", "*.java", "*.pyi", "*.pyx",
     "*.c", "*.cc", "*.cpp", "*.h", "*.md", "*.rst", "*Dockerfile",
-    "*Makefile", "*.yaml", "*.yml",
+    "*Makefile", "*.yaml", "*.yml", "*.php", "*.phtml", "*.php4", "*.php5", "*.phps",
 }
 
 DEFAULT_EXCLUDE_PATTERNS = {

@@ -6,7 +6,6 @@ from utils.crawl_git_repo import crawl_git_repo, parse_github_url
 from utils.call_llm import call_llm
 from utils.crawl_local_files import crawl_local_files
 
-
 # Shared prompt constants to reduce redundancy
 STRICT_ACCURACY_REQUIREMENTS = """
 **STRICT ACCURACY**: Do NOT invent, fabricate, or assume any information not explicitly present in the provided code. This includes:
@@ -28,7 +27,6 @@ PROFESSIONAL_TONE_GUIDELINES = """
 - Maintain proportional coverage: Match explanation depth to actual component significance
 - Focus on clarity, accuracy, essential information, design decisions, architectural patterns, system relationships, and the "why" over "what" (architectural purpose, design rationale)
 - Organize content logically with clear headers and sections
-- Use Markdown formatting consistently
 """
 
 OUTPUT_FORMAT_INSTRUCTIONS = """
@@ -78,6 +76,66 @@ def get_common_context(shared):
     }
 
 
+# Shared utility function to create directory tree representation
+def create_directory_tree(files_data, max_items_per_level=15, max_total_lines=40, max_depth=3):
+    """Create a directory tree representation from files data.
+    
+    Args:
+        files_data: List of (path, content) tuples or list of file paths
+        max_items_per_level: Maximum items to show per directory level
+        max_total_lines: Maximum total lines in output
+        max_depth: Maximum depth to traverse
+        
+    Returns:
+        str: Formatted directory tree
+    """
+    # Handle different input formats
+    if files_data and isinstance(files_data[0], tuple):
+        paths = [path for path, _ in files_data]
+    else:
+        paths = [file_info[0] for file_info in files_data if isinstance(file_info, tuple) and len(file_info) >= 2]
+    
+    # Build directory structure
+    tree_dict = {}
+    for path in paths:
+        parts = path.split('/')
+        current = tree_dict
+        for part in parts[:-1]:  # directories
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+        # Add file
+        if parts:
+            filename = parts[-1]
+            if isinstance(current, dict):
+                current[filename] = None  # None indicates it's a file
+    
+    # Convert to readable tree format
+    def format_tree(tree_dict, prefix="", current_depth=0):
+        if current_depth >= max_depth:
+            return []
+        
+        lines = []
+        items = sorted(tree_dict.items()) if isinstance(tree_dict, dict) else []
+        
+        for i, (name, subtree) in enumerate(items[:max_items_per_level]):
+            is_last = i == len(items) - 1
+            current_prefix = "└── " if is_last else "├── "
+            lines.append(f"{prefix}{current_prefix}{name}")
+            
+            if subtree is not None and isinstance(subtree, dict) and subtree:
+                next_prefix = prefix + ("    " if is_last else "│   ")
+                lines.extend(format_tree(subtree, next_prefix, current_depth + 1))
+        
+        if len(items) > max_items_per_level:
+            lines.append(f"{prefix}... ({len(items) - max_items_per_level} more items)")
+        
+        return lines
+    
+    tree_lines = format_tree(tree_dict)
+    return "\n".join(tree_lines[:max_total_lines])
+
+
 # Helper function to parse YAML from LLM responses with multiple strategies
 def parse_yaml_from_llm_response(response):
     """Parse YAML from LLM response using multiple fallback strategies.
@@ -124,71 +182,39 @@ def parse_yaml_from_llm_response(response):
         raise ValueError(f"Failed to parse YAML from LLM response. YAML Error: {e}\n\nResponse content:\n{response[:500]}...")
 
 
-# Shared repository type detection function
-def detect_repository_type(files_data):
-    """Detect repository type based on file patterns and directory structure"""
-    paths = [path for path, _ in files_data]
-    root_dirs = set()
-    config_files = set()
+# Simple LLM-based repository type detection using directory tree
+def detect_repository_type(files_data, shared_context=None):
+    """Detect repository type using LLM analysis of directory tree structure"""
+    # Check if we already have the result cached in shared context
+    if shared_context and "repository_type" in shared_context:
+        return shared_context["repository_type"]
+    # Create directory tree using shared utility
+    directory_tree = create_directory_tree(files_data, max_items_per_level=15, max_total_lines=40)
+    doc_context = extract_documentation_context(files_data)
+    prompt = f"""Analyze this repository directory structure and determine its type. Respond with ONLY ONE of these exact types: monorepo, library, application, framework, documentation, infrastructure, or mixed.
+
+Directory Structure:
+{directory_tree}
+
+README file content to help contextualize the repository:
+{doc_context["readme_content"][:1000]}
+
+Repository type definitions:
+- monorepo
+- library
+- framework
+- documentation
+- application
+- mixed
+
+Respond with only the repository type:"""
+    response = call_llm(prompt, use_cache=True)
+    repo_type = response.strip().lower()
     
-    # Extract root directories and config files
-    for path in paths:
-        parts = path.split('/')
-        if len(parts) > 1:
-            root_dirs.add(parts[0])
-        filename = parts[-1].lower()
-        config_files.add(filename)
-    
-    # Enhanced detection patterns
-    # Monorepo indicators
-    monorepo_dirs = {'packages', 'apps', 'services', 'libs', 'modules', 'projects', 'workspaces', 'components'}
-    monorepo_configs = {'lerna.json', 'nx.json', 'pnpm-workspace.yaml', 'rush.json', 'workspace.json', 'yarn.lock'}
-    
-    # Library/Package indicators
-    package_configs = {'setup.py', 'pyproject.toml', 'package.json', 'cargo.toml', 'composer.json', 'pom.xml', 'go.mod', 'gemspec'}
-    library_dirs = {'src', 'lib', 'pkg'}
-    
-    # Application indicators
-    app_entries = {'main.py', 'app.py', 'index.js', 'server.js', 'main.go', 'main.rs', 'app.js', 'index.html'}
-    app_configs = {'dockerfile', 'docker-compose.yml', 'requirements.txt', 'pipfile', 'procfile'}
-    deployment_dirs = {'deploy', 'deployment', 'k8s', 'helm'}
-    
-    # Framework/Tool indicators
-    framework_patterns = {'cli', 'plugin', 'extension', 'template', 'generator', 'scaffold'}
-    framework_configs = {'bin', 'scripts'}
-    
-    # Documentation indicators
-    doc_patterns = {'docs', 'documentation', 'examples', 'tutorials', 'guides', 'wiki', 'book'}
-    doc_configs = {'mkdocs.yml', 'docusaurus.config.js', '_config.yml', 'gitbook.json'}
-    
-    # Infrastructure indicators
-    infra_patterns = {'.github', '.gitlab-ci.yml', 'terraform', 'ansible', 'kubernetes', 'k8s', 'helm', 'charts'}
-    infra_configs = {'terraform.tf', 'ansible.yml', 'docker-compose.yml', '.travis.yml', '.circleci'}
-    
-    # Enhanced detection logic with scoring
-    monorepo_score = len(monorepo_dirs.intersection(root_dirs)) * 2 + len(monorepo_configs.intersection(config_files))
-    library_score = len(package_configs.intersection(config_files)) + (1 if library_dirs.intersection(root_dirs) else 0)
-    app_score = len([f for f in app_entries if f in config_files]) + len(app_configs.intersection(config_files)) + len(deployment_dirs.intersection(root_dirs))
-    framework_score = len(framework_patterns.intersection(root_dirs)) + len(framework_configs.intersection(root_dirs)) + len([p for p in paths if 'cli' in p.lower()])
-    doc_score = len(doc_patterns.intersection(root_dirs)) + len(doc_configs.intersection(config_files))
-    infra_score = len(infra_patterns.intersection(root_dirs)) + len(infra_configs.intersection(config_files))
-    
-    # Determine type based on highest score
-    scores = {
-        'monorepo': monorepo_score,
-        'library': library_score,
-        'application': app_score,
-        'framework': framework_score,
-        'documentation': doc_score,
-        'infrastructure': infra_score
-    }
-    
-    max_score = max(scores.values())
-    if max_score == 0:
-        return "mixed"
-    
-    # Return the type with highest score
-    return max(scores, key=scores.get)
+    if shared_context is not None:
+        shared_context["repository_type"] = repo_type
+        print(f"Repository type detected: {repo_type}")
+    return repo_type
 
 
 # Extract documentation context from various sources
@@ -209,34 +235,34 @@ def extract_documentation_context(files_data):
         
         # README files
         if filename.startswith('readme'):
-            doc_context['readme_content'] = content[:2000]  # First 2000 chars for context
+            doc_context['readme_content'] = content  # First 2000 chars for context
         
         # Architecture documentation
         elif any(term in path_lower for term in ['architecture', 'arch', 'design', 'adr']):
             doc_context['architecture_docs'].append({
                 'path': path,
-                'content': content[:1000]  # First 1000 chars
+                'content': content[:5000]  # First 1000 chars
             })
         
         # API documentation
         elif any(term in path_lower for term in ['api', 'swagger', 'openapi']):
             doc_context['api_docs'].append({
                 'path': path,
-                'content': content[:1000]
+                'content': content[:2000]
             })
         
         # Design documents
         elif any(term in filename for term in ['design', 'spec', 'specification']):
             doc_context['design_docs'].append({
                 'path': path,
-                'content': content[:1000]
+                'content': content[:2000]
             })
         
         # Contributing guides
         elif any(term in filename for term in ['contributing', 'development', 'dev-guide']):
             doc_context['contributing_guides'].append({
                 'path': path,
-                'content': content[:1000]
+                'content': content[:2000]
             })
         
         # Documentation structure (files in docs directories)
@@ -276,6 +302,7 @@ class FetchRepo(Node):
         }
 
     def exec(self, prep_res):
+        
         if prep_res["repo_url"]:
             print(f"Crawling repository: {prep_res['repo_url']}...")
             # Parse GitHub URL to extract components
@@ -362,7 +389,7 @@ class IdentifyAbstractions(Node):
             [f"- {idx} # {path}" for idx, path in file_info]
         )
         # Detect repository type and extract documentation context for better guidance
-        repo_type = detect_repository_type(ctx["files_data"])
+        repo_type = detect_repository_type(ctx["files_data"], shared)
         doc_context = extract_documentation_context(ctx["files_data"])
         
         return (
@@ -406,58 +433,19 @@ class IdentifyAbstractions(Node):
 
         prompt = f"""
 ## Role and Task
-You are an expert software architect and technical documentation specialist. Your task is to systematically identify the core code abstractions in this repository for comprehensive wiki documentation that serves as a definitive reference for developers.
+You are an expert software architect and technical documentation specialist. Your task is to identify the 1-{max_abstraction_num} top core code abstractions in this repository for comprehensive wiki documentation that serves as a definitive reference for developers.
 
 ## Critical Requirements
 {STRICT_ACCURACY_REQUIREMENTS}
 
-**IMPORTANT**: Base your analysis ONLY on the actual code provided below. Do NOT:
-- Reference external libraries, frameworks, or tools not explicitly shown in the code
-- Create fictional URLs, documentation links, or external resources
-- Mention concepts not directly implemented in the provided codebase
-- Assume functionality that isn't clearly evident from the code
-
-## Systematic Analysis Process
-
-### Step 1: Project Context Analysis
-- If README.md or documentation files are provided, extract the project's stated purpose and key components
-- Identify the primary domain/problem space the codebase addresses
-- Note any explicitly mentioned architectural patterns or design principles
-
-### Step 2: Abstraction Identification Criteria
-Identify abstractions that meet **at least 2** of these concrete criteria:
-
-**Primary Criteria (High Priority)**:
-- **Entry Points**: Main classes, functions, or modules that serve as system entry points
-- **Data Models**: Core data structures, entities, or domain objects that represent key business concepts
-- **Processing Engines**: Components that perform the system's primary computational or business logic
-- **Interface Boundaries**: Public APIs, service interfaces, or integration points with external systems
-- **State Management**: Components responsible for managing application state, persistence, or configuration
-
-**Secondary Criteria (Medium Priority)**:
-- **Workflow Orchestration**: Components that coordinate multiple operations or manage process flows
-- **Extension Points**: Plugin systems, hooks, or customization interfaces
-- **Resource Management**: Components handling files, network, databases, or other system resources
-- **Cross-Cutting Concerns**: Logging, security, validation, or monitoring systems (only if architecturally significant)
-
-### Step 3: Repository-Type-Specific Focus
-**Repository Type: {repo_type.title()}**
-- **Monorepos**: Prioritize distinct functional domains, services, or packages over technical layers
-- **Libraries/Packages**: Focus on public APIs, core algorithms, and main user-facing interfaces
-- **Applications**: Emphasize business logic, data models, and user-facing features over infrastructure
-- **Frameworks/Tools**: Highlight extensibility points, plugin systems, and core processing engines
-- **Mixed repositories**: Identify primary purpose first, then apply appropriate strategy
-
 ## Context
 **Project**: `{project_name}`
-**Available Files** (reference these indices in your output):
+**Available Files**:
 {file_listing_for_prompt}
-
-**Contextual Guidance**: {'This repository includes documentation files (README, guides, etc.) that provide important context about the project\'s purpose and structure. Use this information to prioritize abstractions that align with the project\'s main goals.' if contextual_file_count > 0 else 'No documentation files detected. Focus on identifying abstractions based on code structure, imports, and apparent functionality patterns.'}
 
 **Documentation Context**: {f'README content available - use it to understand project goals and key components. ' if doc_context['readme_content'] else ''}{f'Architecture docs found ({len(doc_context["architecture_docs"])}) - leverage for system design insights. ' if doc_context['architecture_docs'] else ''}{f'API documentation available ({len(doc_context["api_docs"])}) - prioritize documented interfaces. ' if doc_context['api_docs'] else ''}{f'Design documents found ({len(doc_context["design_docs"])}) - use for understanding intended abstractions. ' if doc_context['design_docs'] else ''}{f'Documentation structure in /docs/ directory - consider documented components as higher priority.' if doc_context['docs_structure'] else 'No structured documentation directory found.'}
 
-**Repository Type**: {repo_type.title()} - {'Focus on distinct functional areas and services across multiple packages/modules.' if repo_type == 'monorepo' else 'Focus on public APIs, core algorithms, and main interfaces that users interact with.' if repo_type == 'library' else 'Prioritize business logic components, data models, and user-facing features over infrastructure.' if repo_type == 'application' else 'Emphasize extensibility points, plugin systems, and core processing engines.' if repo_type == 'framework' else 'Focus on content organization, generation systems, and publishing workflows.' if repo_type == 'documentation' else 'Focus on deployment configurations, infrastructure components, and automation systems.' if repo_type == 'infrastructure' else 'Analyze the primary purpose first, then apply appropriate abstraction strategy.'}
+**Repository Type**: {repo_type} - {'Focus on distinct functional areas and services across multiple packages/modules.' if repo_type == 'monorepo' else 'Focus on public APIs, core algorithms, and main interfaces that users interact with.' if repo_type == 'library' else 'Prioritize business logic components, data models, and user-facing features over infrastructure.' if repo_type == 'application' else 'Emphasize extensibility points, plugin systems, and core processing engines.' if repo_type == 'framework' else 'Focus on content organization, generation systems, and publishing workflows.' if repo_type == 'documentation' else 'Focus on deployment configurations, infrastructure components, and automation systems.' if repo_type == 'infrastructure' else 'Analyze the primary purpose first, then apply appropriate abstraction strategy.'}
 
 ## Codebase to Analyze
 {context}
@@ -482,9 +470,7 @@ Provide your analysis as a YAML list following this exact structure:
   file_indices:
     - 1 # processors/main.py
     - 4 # utils/transform.py
-```
-
-**Remember**: Only reference files, concepts, and functionality that actually exist in the provided code context."""
+```"""
         response = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))  # Use cache only if enabled and not retrying
 
         # --- Validation ---
@@ -586,7 +572,7 @@ class AnalyzeRelationships(Node):
         context += file_context_str
         
         # Detect repository type and extract documentation context for better analysis
-        repo_type = detect_repository_type(ctx["files_data"])
+        repo_type = detect_repository_type(ctx["files_data"], shared)
         doc_context = extract_documentation_context(ctx["files_data"])
 
         return (
@@ -1169,7 +1155,7 @@ class CombineTutorial(Node):
         repo_url = shared.get("repo_url")  # Get the repository URL
         
         # Detect repository type and extract documentation context for better categorization
-        repo_type = detect_repository_type(ctx["files_data"])
+        repo_type = detect_repository_type(ctx["files_data"], shared)
         doc_context = extract_documentation_context(ctx["files_data"])
         
         # Extract README.md, license, and other contextual information
@@ -1510,47 +1496,7 @@ Provide the complete Markdown content for the index page{lang_hint}. Start with 
 
     def _create_directory_tree(self, files_info):
         """Create a simple directory tree representation for LLM analysis."""
-        paths = [file_info[0] for file_info in files_info if isinstance(file_info, tuple) and len(file_info) >= 2]
-        
-        # Build directory structure
-        tree_dict = {}
-        for path in paths:
-            parts = path.split('/')
-            current = tree_dict
-            for part in parts[:-1]:  # directories
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-            # Add file
-            if parts:
-                filename = parts[-1]
-                if isinstance(current, dict):
-                    current[filename] = None  # None indicates it's a file
-        
-        # Convert to readable tree format (simplified)
-        def format_tree(tree_dict, prefix="", max_depth=3, current_depth=0):
-            if current_depth >= max_depth:
-                return []
-            
-            lines = []
-            items = sorted(tree_dict.items()) if isinstance(tree_dict, dict) else []
-            
-            for i, (name, subtree) in enumerate(items[:20]):  # Limit to 20 items per level
-                is_last = i == len(items) - 1
-                current_prefix = "└── " if is_last else "├── "
-                lines.append(f"{prefix}{current_prefix}{name}")
-                
-                if subtree is not None and isinstance(subtree, dict) and subtree:
-                    next_prefix = prefix + ("    " if is_last else "│   ")
-                    lines.extend(format_tree(subtree, next_prefix, max_depth, current_depth + 1))
-            
-            if len(items) > 20:
-                lines.append(f"{prefix}... ({len(items) - 20} more items)")
-            
-            return lines
-        
-        tree_lines = format_tree(tree_dict)
-        return "\n".join(tree_lines[:50])  # Limit total lines
+        return create_directory_tree(files_info, max_items_per_level=20, max_total_lines=50)
 
     def _extract_license_info(self, file_path, content):
         """Extract license information from license file content."""
