@@ -197,7 +197,7 @@ Directory Structure:
 {directory_tree}
 
 README file content to help contextualize the repository:
-{doc_context["readme_content"][:1000]}
+{doc_context["readme_content"][:3000]}
 
 Repository type definitions:
 - monorepo
