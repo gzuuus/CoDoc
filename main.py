@@ -9,8 +9,8 @@ dotenv.load_dotenv()
 # Default file patterns
 DEFAULT_INCLUDE_PATTERNS = {
     "*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.go", "*.java", "*.pyi", "*.pyx",
-    "*.c", "*.cc", "*.cpp", "*.h", "*.md", "*.rst", "*Dockerfile",
-    "*Makefile", "*.yaml", "*.yml",
+    "*.c", "*.cc", "*.cpp", "*.h", "*.md", "*.rst", "*.rs", "*Dockerfile",
+    "*Makefile", "*.yaml", "*.yml", "*.php", "*.phtml", "*.php4", "*.php5", "*.phps",
 }
 
 DEFAULT_EXCLUDE_PATTERNS = {
@@ -55,7 +55,7 @@ def main():
     # Add use_cache parameter to control LLM caching
     parser.add_argument("--no-cache", action="store_true", help="Disable LLM response caching (default: caching enabled)")
     # Add max_abstraction_num parameter to control the number of abstractions
-    parser.add_argument("--max-abstractions", type=int, default=10, help="Maximum number of abstractions to identify (default: 10)")
+    parser.add_argument("--max-abstractions", type=int, default=20, help="Maximum number of abstractions to identify (default: 20)")
 
     args = parser.parse_args()
 

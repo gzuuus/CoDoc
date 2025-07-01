@@ -13,9 +13,6 @@
   - No vendor lock-in, use any model that implements the OpenAI API.
 - **Prompting:**
   - We are exploring different prompt strategies to generate better tutorials.
-- **Benchmarking:**
-  - We are benchmarking different models and prompts.
-  - See the [`bench/`](./bench/) directory for results.
 
 ---
 
