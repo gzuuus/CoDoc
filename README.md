@@ -1,18 +1,19 @@
-<h1 align="center">Turns Codebase into Easy Tutorial with AI</h1>
+<h1 align="center">CoDoc: AI-Powered Technical Wiki Code Documentation</h1>
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-> **This is a fork of [`The-Pocket/Tutorial-Codebase-Knowledge`](https://github.com/The-Pocket/Tutorial-Codebase-Knowledge)**
->
-> Use it with any OpenAI-compatible model provider by simply changing your API endpoint and model—no code changes required!
+> **This project is a continuation of [`The-Pocket/Tutorial-Codebase-Knowledge`](https://github.com/The-Pocket/Tutorial-Codebase-Knowledge)**
 
-## 🆕 What's Different in This Fork?
+## 🆕 Key Features of CoDoc
 
-- **OpenAI-Compatible API Focus:**
-  - Easily configure your own API endpoint and model (OpenAI, Azure, local, etc.).
-  - No vendor lock-in, use any model that implements the OpenAI API.
-- **Prompting:**
-  - We are exploring different prompt strategies to generate better tutorials.
+- **AI-Powered Documentation Generation:**
+  - Automatically analyze codebases and generate comprehensive technical wiki documents.
+- **Customizable Output:**
+  - Define inclusions, exclusions, and language preferences for tailored documentation.
+- **Flexible Integration:**
+  - Supports any git repository or local directory for codebase analysis.
+- **OpenAI-Compatible Model Support:**
+  - Easily configure your own API endpoint and model (OpenAI, Azure, local, etc.) for AI processing.
 
 ---
 
@@ -36,18 +37,18 @@ Optionally create a virtual environment using `uv venv` and activate it
      OPENAI_MODEL=your_model
      ```
 
-4. **Generate a codebase tutorial:**
+4. **Generate codebase documentation:**
    ```bash
-   # Analyze a GitHub repository
+   # Analyze a GitHub repository to generate documentation
    uv run main.py --repo https://github.com/username/repo
 
    # You can also specify additional options:
    uv run main.py --repo https://github.com/username/repo --include "*.py" "*.js" --exclude "tests/*" --max-size 50000
 
-   # Or, analyze a local directory
+   # Or, analyze a local directory to generate documentation
    uv run main.py --dir /path/to/your/codebase --include "*.py" --exclude "*test*"
 
-   # Or, generate a tutorial in Chinese
+   # Or, generate documentation in Chinese
    uv run main.py --repo https://github.com/username/repo --language "Chinese"
    ```
 
@@ -60,7 +61,7 @@ Optionally create a virtual environment using `uv venv` and activate it
    - `-s, --max-size`: Maximum file size in bytes (default: 100KB)
    - `--language`: Language for the generated tutorial (default: "english")
 
-The application will crawl the repository, analyze the codebase structure, generate tutorial content in the specified language, and save the output in the specified directory (default: `./output`).
+The application will crawl the repository, analyze the codebase structure, generate technical wiki code documentation in the specified language, and save the output in the specified directory (default: `./output`).
 
 ---
 
