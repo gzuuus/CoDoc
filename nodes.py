@@ -5,6 +5,8 @@ from pocketflow import Node, BatchNode
 from utils.crawl_git_repo import crawl_git_repo, parse_github_url
 from utils.call_llm import call_llm
 from utils.crawl_local_files import crawl_local_files
+import asyncio
+from utils.nostr_publisher import publish_long_form_content_event
 
 # Shared prompt constants to reduce redundancy
 STRICT_ACCURACY_REQUIREMENTS = """
@@ -1316,7 +1318,8 @@ class CombineTutorial(Node):
         output_base_dir = shared.get("output_dir", "output")  # Default output dir
         output_path = os.path.join(output_base_dir, ctx["project_name"])
         repo_url = shared.get("repo_url")  # Get the repository URL
-        
+        nostr_flag = shared.get("publish_to_nostr", False) # Get the Nostr flag
+
         # Detect repository type and extract documentation context for better categorization
         repo_type = detect_repository_type(ctx["files_data"], shared)
         doc_context = extract_documentation_context(ctx["files_data"])
@@ -1457,6 +1460,8 @@ class CombineTutorial(Node):
             "index_content": index_content,
             "chapter_files": chapter_files,  # List of {"filename": str, "content": str}
             "beginner_friendly_episode": beginner_friendly_episode, # NEW: Pass the beginner-friendly content
+            "publish_to_nostr": nostr_flag, # Pass the Nostr flag
+            "repo_url": repo_url,
         }
 
     def _generate_comprehensive_index(self, project_name, relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context="", metadata=None, repo_type="mixed", beginner_friendly_episode_content=""):
@@ -1623,7 +1628,7 @@ Create a concise, well-structured index page that serves as the entry point for 
 2. **📊 Generation Metadata** - Include the generation metadata provided above (generation date, repository, commit info, license, etc.)
 3. **🎯 What This Project Does** - Clear value proposition and primary functionality
 4. **📁 Repository Structure** - This is a **{repo_type.title()}** repository. Analyze the directory structure focusing on:
-   {'- Multiple distinct functional areas and how they are organized across packages/modules\n   - Key services or applications and their separation of concerns\n   - Shared libraries and common utilities' if repo_type == 'monorepo' else '- Public API structure and main entry points\n   - Core library organization and module hierarchy\n   - Distribution and packaging approach' if repo_type == 'library' else '- Application entry points and main execution flow\n   - Business logic organization and feature structure\n   - Configuration and deployment setup' if repo_type == 'application' else '- Extensibility mechanisms and plugin architecture\n   - CLI interfaces and developer tools\n   - Core processing engines and framework components' if repo_type == 'framework' else '- Content organization and documentation structure\n   - Example code and tutorial progression\n   - Publishing and generation workflows' if repo_type == 'documentation' else '- Infrastructure components and deployment configurations\n   - Automation systems and CI/CD pipelines\n   - Environment management and orchestration' if repo_type == 'infrastructure' else '- Primary purpose and main organizational patterns\n   - Key functional areas and their relationships\n   - Overall architecture and design approach'}
+   {'- Multiple distinct functional areas and how they are organized across packages/modules - Key services or applications and their separation of concerns - Shared libraries and common utilities' if repo_type == 'monorepo' else '- Public API structure and main entry points - Core library organization and module hierarchy - Distribution and packaging approach' if repo_type == 'library' else '- Application entry points and main execution flow - Business logic organization and feature structure - Configuration and deployment setup' if repo_type == 'application' else '- Extensibility mechanisms and plugin architecture - CLI interfaces and developer tools - Core processing engines and framework components' if repo_type == 'framework' else '- Content organization and documentation structure - Example code and tutorial progression - Publishing and generation workflows' if repo_type == 'documentation' else '- Infrastructure components and deployment configurations - Automation systems and CI/CD pipelines - Environment management and orchestration' if repo_type == 'infrastructure' else '- Primary purpose and main organizational patterns - Key functional areas and their relationships - Overall architecture and design approach'}
    
    Provide key insights about the organization and structure without repeating the type classification.
 5. **🏗️ Architecture Overview** - High-level design and key architectural patterns (focus on essential patterns only)
@@ -1657,7 +1662,7 @@ Provide the complete Markdown content for the index page{lang_hint}. Start with 
 """
         
         # Generate the comprehensive index using LLM
-        index_content = call_llm(prompt)
+        index_content = call_llm(prompt, use_cache=shared.get("use_cache", True))
         
         # Clean up any potential code fence wrapping
         if index_content.startswith("```markdown"):
@@ -1747,7 +1752,8 @@ Provide the complete Markdown content for the index page{lang_hint}. Start with 
         output_path = prep_res["output_path"]
         index_content = prep_res["index_content"]
         chapter_files = prep_res["chapter_files"]
-        beginner_friendly_episode = prep_res["beginner_friendly_episode"] # NEW: Get the beginner-friendly content
+        beginner_friendly_episode = prep_res["beginner_friendly_episode"]
+        publish_to_nostr = prep_res["publish_to_nostr"] # Get the Nostr flag
 
         print(f"Combining tutorial into directory: {output_path}")
         # Rely on Node's built-in retry/fallback
@@ -1758,6 +1764,12 @@ Provide the complete Markdown content for the index page{lang_hint}. Start with 
 
         # Write index.md
         index_filepath = os.path.join(output_path, "index.md")
+
+        print(f"repo_url in combineTutorial: {prep_res.keys()}, repo_url: {prep_res['repo_url']}")
+        if publish_to_nostr:
+            asyncio.run(publish_long_form_content_event("index", index_content + watermark, prep_res["repo_url"]))
+            print(f"  - Published index.md to Nostr.")
+
         with open(index_filepath, "w", encoding="utf-8") as f:
             f.write(index_content + watermark)
         print(f"  - Wrote {index_filepath}")
@@ -1765,19 +1777,30 @@ Provide the complete Markdown content for the index page{lang_hint}. Start with 
         # Write chapter files
         for chapter_info in chapter_files:
             chapter_filepath = os.path.join(output_path, chapter_info["filename"])
+            if publish_to_nostr:
+                title = chapter_info["filename"]
+                asyncio.run(publish_long_form_content_event(title, chapter_info["content"] + watermark, prep_res["repo_url"]))
+                print(f"  - Published {title} to Nostr.")
+
             with open(chapter_filepath, "w", encoding="utf-8") as f:
                 f.write(chapter_info["content"] + watermark)
             print(f"  - Wrote {chapter_filepath}")
-        
+
         # Write beginner-friendly episode
         if beginner_friendly_episode:
             episode_filepath = os.path.join(output_path, "beginner_friendly_episode.md")
+            if publish_to_nostr:
+                title = os.path.basename(episode_filepath).replace('.md', '')
+                asyncio.run(publish_long_form_content_event(title, beginner_friendly_episode + watermark, prep_res["repo_url"]))
+                print(f"  - Published {title} to Nostr.")
+
             with open(episode_filepath, "w", encoding="utf-8") as f:
                 f.write(beginner_friendly_episode + watermark)
             print(f"  - Wrote {episode_filepath}")
-
+                
         return output_path  # Return the final path
 
     def post(self, shared, prep_res, exec_res):
         shared["final_output_dir"] = exec_res  # Store the output path
         print(f"\nTutorial generation complete! Files are in: {exec_res}")
+
