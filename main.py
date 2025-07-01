@@ -54,6 +54,8 @@ def main():
     parser.add_argument("--language", default="english", help="Language for the generated tutorial (default: english)")
     # Add use_cache parameter to control LLM caching
     parser.add_argument("--no-cache", action="store_true", help="Disable LLM response caching (default: caching enabled)")
+    # Add Nostr publishing flag
+    parser.add_argument("--nostr", action="store_true", help="Publish generated content to Nostr (default: disabled)")
     # Add max_abstraction_num parameter to control the number of abstractions
     parser.add_argument("--max-abstractions", type=int, default=20, help="Maximum number of abstractions to identify (default: 20)")
 
@@ -84,6 +86,9 @@ def main():
         
         # Add use_cache flag (inverse of no-cache flag)
         "use_cache": not args.no_cache,
+
+        # Add Nostr publishing flag
+        "publish_to_nostr": args.nostr,
         
         # Add max_abstraction_num parameter
         "max_abstraction_num": args.max_abstractions,
@@ -100,6 +105,7 @@ def main():
     # Display starting message with repository/directory and language
     print(f"Starting tutorial generation for: {args.repo or args.dir} in {args.language.capitalize()} language")
     print(f"LLM caching: {'Disabled' if args.no_cache else 'Enabled'}")
+    print(f"Nostr publishing: {'Enabled' if args.nostr else 'Disabled'}")
 
     # Create the flow instance
     tutorial_flow = create_tutorial_flow()
