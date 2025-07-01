@@ -384,17 +384,12 @@ class IdentifyAbstractions(Node):
             return context, file_info, len(contextual_files)  # Return contextual file count
 
         context, file_info, contextual_file_count = create_llm_context(ctx["files_data"])
-        # Format file info for the prompt (comment is just a hint for LLM)
-        file_listing_for_prompt = "\n".join(
-            [f"- {idx} # {path}" for idx, path in file_info]
-        )
         # Detect repository type and extract documentation context for better guidance
         repo_type = detect_repository_type(ctx["files_data"], shared)
         doc_context = extract_documentation_context(ctx["files_data"])
         
         return (
             context,
-            file_listing_for_prompt,
             len(ctx["files_data"]),
             ctx["project_name"],
             ctx["language"],
@@ -408,7 +403,6 @@ class IdentifyAbstractions(Node):
     def exec(self, prep_res):
         (
             context,
-            file_listing_for_prompt,
             file_count,
             project_name,
             language,
@@ -441,7 +435,7 @@ You are an expert software architect and technical documentation specialist. You
 ## Context
 **Project**: `{project_name}`
 **Available Files**:
-{file_listing_for_prompt}
+{self._generate_file_listing_for_prompt(contextual_file_count, file_count, context)}
 
 **Documentation Context**: {f'README content available - use it to understand project goals and key components. ' if doc_context['readme_content'] else ''}{f'Architecture docs found ({len(doc_context["architecture_docs"])}) - leverage for system design insights. ' if doc_context['architecture_docs'] else ''}{f'API documentation available ({len(doc_context["api_docs"])}) - prioritize documented interfaces. ' if doc_context['api_docs'] else ''}{f'Design documents found ({len(doc_context["design_docs"])}) - use for understanding intended abstractions. ' if doc_context['design_docs'] else ''}{f'Documentation structure in /docs/ directory - consider documented components as higher priority.' if doc_context['docs_structure'] else 'No structured documentation directory found.'}
 
@@ -532,6 +526,39 @@ Provide your analysis as a YAML list following this exact structure:
         shared["abstractions"] = (
             exec_res  # List of {"name": str, "description": str, "files": [int]}
         )
+
+    def _generate_file_listing_for_prompt(self, contextual_file_count, file_count, context_str):
+        """Dynamically generates a file listing from the context string, similar to how it was done before."""
+        lines = context_str.split('\n')
+        file_listing = []
+        
+        # Track if we are in the contextual files section or code files section
+        in_contextual_section = False
+        in_code_section = False
+
+        for i, line in enumerate(lines):
+            if "=== PROJECT CONTEXT AND DOCUMENTATION ===" in line:
+                in_contextual_section = True
+                in_code_section = False
+                continue
+            elif "=== CODE FILES ===" in line:
+                in_code_section = True
+                in_contextual_section = False
+                continue
+
+            if in_contextual_section or in_code_section:
+                # Look for lines marking file entries, e.g., "--- File Index X: path ---"
+                match = re.match(r"--- File Index (\d+): (.*?) ---", line)
+                if match:
+                    file_index = match.group(1)
+                    file_path = match.group(2)
+                    file_listing.append(f"- {file_index} # {file_path}")
+        
+        if not file_listing and file_count > 0:
+            # Fallback: if dynamic parsing failed, and files exist, provide a generic message
+            return f"({file_count} files available, details provided in 'Codebase to Analyze' section.)"
+
+        return "\n".join(file_listing)
 
 
 class AnalyzeRelationships(Node):
@@ -1147,6 +1174,142 @@ Provide ONLY the Markdown content (no code fences around the entire output).
         print(f"Finished writing {len(exec_res_list)} wiki articles.")
 
 
+class WriteBeginnerFriendlyEpisode(Node):
+    def prep(self, shared):
+        ctx = get_common_context(shared)
+        abstractions = shared["abstractions"]
+        relationships = shared["relationships"]
+        chapters = shared["chapters"]
+        project_name = ctx["project_name"]
+        language = ctx["language"]
+        use_cache = ctx["use_cache"]
+
+        # Combine wiki chapters into a single string for context
+        combined_wiki_content = "\n\n".join(chapters)
+
+        # Prepare context for the LLM
+        abstractions_overview = "\n".join([
+            f"- {abstr['name']}: {abstr['description']}"
+            for abstr in abstractions
+        ])
+        
+        summary_note = ""
+        lang_ctx = get_language_context(language)
+        if lang_ctx["is_non_english"]:
+            summary_note = f" (Note: Project Summary and Relationships might be in {lang_ctx['lang_cap']})"
+
+
+        context = f"""
+## Project Overview (for your understanding)
+Project Name: {project_name}
+Project Summary{summary_note}: {relationships["summary"]}
+
+## Core Abstractions (for your understanding)
+{abstractions_overview}
+
+## Key Relationships (for your understanding)
+{relationships["details"]}
+
+## Detailed Wiki Content (Generated Chapters)
+{combined_wiki_content}
+"""
+        return (
+            context,
+            project_name,
+            language,
+            use_cache,
+            abstractions,
+            relationships,
+            chapters
+        )
+
+    def exec(self, prep_res):
+        (
+            context,
+            project_name,
+            language,
+            use_cache,
+            abstractions,
+            relationships,
+            chapters
+        ) = prep_res
+        print(f"Generating beginner-friendly episode for {project_name}...")
+
+        # Add language instructions and hints if not English
+        language_instruction = ""
+        if language.lower() != "english":
+            lang_cap = language.capitalize()
+            language_instruction = f"IMPORTANT: Write this ENTIRE beginner-friendly episode in **{lang_cap}**. Do NOT use English anywhere except required proper nouns.\n\n"
+
+        prompt = f"""
+{language_instruction}## Role and Task
+You are an expert technical writer and educator. Your task is to transform a detailed technical wiki about a software project into a beginner-friendly overview document. This document should be easy for a non-technical person to understand while still conveying accurate information about the system and its concepts.
+
+## Critical Requirements
+{STRICT_ACCURACY_REQUIREMENTS}
+
+The document should prioritize clarity, relevance, and accessibility. The primary goal is to describe what the project does, relationships between modules and parts of the codebase, presenting complex technical concepts and terms in a way that an average non-technical person can understand. The document should be beginner-friendly, precise, and approachable, without oversimplifying the underlying concepts.
+
+## Suggested Document Structure (Adapt as needed)
+Note: This structure is purely suggestive and should not be followed rigidly. Combine sections or adapt as necessary to best explain *this specific project*.
+
+1.  **Introduction**
+    *   Project overview
+    *   Core purpose
+    *   System's primary objectives
+
+2.  **System Architecture**
+    *   High-level system diagram (conceptual, using mermaid)
+    *   Key components
+    *   Component interactions
+
+3.  **Module Breakdown**
+    *   Core modules
+    *   Module responsibilities
+    *   Functional interactions
+
+4.  **Key Concepts**
+    *   Fundamental technical concepts
+    *   Simplified explanations
+    *   Conceptual relationships
+
+5.  **Workflow and Data Flow**
+    *   System operation process
+    *   Data transformation steps
+    *   Key processing logic
+
+6.  **Technical Foundations**
+    *   Primary design principles
+    *   Critical implementation strategies
+    *   Core algorithmic approaches
+
+7.  **Glossary**
+    *   Essential technical terms
+    *   Plain language definitions
+
+## Context
+Project Name: {project_name}
+
+{context}
+
+{OUTPUT_FORMAT_INSTRUCTIONS}
+- Make technical explanations **accessible to a non-technical audience**.
+- Use analogies, and examples to explain complex concepts if necessary
+- Avoid jargon where possible, or explain it clearly.
+- Focus on the "what" and "why" from a user perspective.
+- Be concise
+- Don't overuse lists, prefer paragraphs
+
+Provide ONLY the Markdown content for the episode (no code fences around the entire output).
+"""
+        episode_content = call_llm(prompt, use_cache=(use_cache and self.cur_retry == 0))
+        print(f"Generated beginner-friendly episode for {project_name}.")
+        return episode_content
+
+    def post(self, shared, prep_res, exec_res):
+        shared["beginner_friendly_episode"] = exec_res # Store the Markdown content
+
+
 class CombineTutorial(Node):
     def prep(self, shared):
         ctx = get_common_context(shared)
@@ -1211,6 +1374,7 @@ class CombineTutorial(Node):
         chapters_content = shared[
             "chapters"
         ]  # list of strings -> content potentially translated
+        beginner_friendly_episode = shared.get("beginner_friendly_episode", "")
 
         # --- Generate Mermaid Diagram ---
         mermaid_lines = ["flowchart TD"]
@@ -1273,18 +1437,29 @@ class CombineTutorial(Node):
                     f"Warning: Mismatch between chapter order, abstractions, or content at index {i} (abstraction index {abstraction_index}). Skipping file generation for this entry."
                 )
         
+        # Add the beginner-friendly episode to chapter_links
+        # Ensure it always appears as the last item
+        bf_episode_number = len(chapter_links) + 1
+        chapter_links.append({
+            "number": bf_episode_number,
+            "title": "Beginner-Friendly Overview",
+            "filename": "beginner_friendly_episode.md",
+            "description": "A high-level, simplified overview of the project for non-technical readers."
+        })
+
         # --- Generate comprehensive index content using LLM ---
         index_content = self._generate_comprehensive_index(
-            ctx["project_name"], relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context, metadata, repo_type
+            ctx["project_name"], relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context, metadata, repo_type, beginner_friendly_episode
         )
 
         return {
             "output_path": output_path,
             "index_content": index_content,
             "chapter_files": chapter_files,  # List of {"filename": str, "content": str}
+            "beginner_friendly_episode": beginner_friendly_episode, # NEW: Pass the beginner-friendly content
         }
 
-    def _generate_comprehensive_index(self, project_name, relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context="", metadata=None, repo_type="mixed"):
+    def _generate_comprehensive_index(self, project_name, relationships_data, abstractions, repo_url, mermaid_diagram, chapter_links, shared, project_context="", metadata=None, repo_type="mixed", beginner_friendly_episode_content=""):
         """Generate a comprehensive index with project overview, tech stack, architecture, and design insights."""
         
         # Get file information for tech stack analysis
@@ -1317,7 +1492,7 @@ class CombineTutorial(Node):
             # Identify config files
             filename = path.split("/")[-1].lower()
             if any(config_name in filename for config_name in [
-                "package.json", "requirements.txt", "cargo.toml", "go.mod", 
+                "package.json", "requirements.txt", "cargo.toml", "go.mod",
                 "pom.xml", "build.gradle", "composer.json", "gemfile",
                 "dockerfile", "docker-compose", "config", "settings", ".env"
             ]):
@@ -1407,42 +1582,42 @@ class CombineTutorial(Node):
             metadata_section = "## Generation Metadata\n" + "\n".join(metadata_lines) + "\n\n"
         
         prompt = f"""
-You are an expert technical documentation specialist and software architect. Your task is to create a comprehensive, authoritative index page for a developer wiki about the project `{project_name}`.
-
+You are an expert technical documentation specialist and software architect. Your task is to create a comprehensive index page for a developer wiki about the project `{project_name}`.
+ 
 {metadata_section}
-
+ 
 ## Project Context
 **Project Summary:** {relationships_data['summary']}
-
+ 
 {'## Additional Project Documentation' + project_context if project_context.strip() else ''}
-
+ 
 ## Directory Structure
 {directory_tree}
-
+ 
 **Detected Repository Type:** {repo_type.title()}
-
+ 
 ## Core Abstractions
 {abstractions_context}
-
+ 
 ## Technical Context
 **File Extensions Found:**
 {tech_stack_context}
-
+ 
 **Configuration Files:**
 {config_files_context}
-
+ 
 ## Tutorial Chapters Available
 {chapter_links_context}
-
+ 
 ## Architecture Diagram
 The following Mermaid diagram shows the relationships between core components:
 ```mermaid
 {mermaid_diagram}
 ```
-
+ 
 ## Your Task
 Create a concise, well-structured index page that serves as the entry point for developers. The index should be informative and provide clear navigation while maintaining proportional emphasis on components based on their actual importance.
-
+ 
 ## Required Sections
 1. **Project Title**
 2. **📊 Generation Metadata** - Include the generation metadata provided above (generation date, repository, commit info, license, etc.)
@@ -1455,11 +1630,11 @@ Create a concise, well-structured index page that serves as the entry point for 
 6. **🛠️ Technology Stack** - Primary languages dependencies, frameworks, tools
 7. **📋 Core Components** - Brief overview of main abstractions and their roles
 8. **🗺️ Component Relationships** - Include the Mermaid diagram with focused explanation
-9. **📚 Wiki Articles** - Navigation to detailed component documentation
-
+9. **📚 Wiki Articles** - Navigation to detailed component documentation, use markdown links with a human-readable title, include beginner-friendly episode as the last article
+ 
 ## Critical Requirements
 {STRICT_ACCURACY_REQUIREMENTS}
-
+ 
 **Additional Guidelines**:
 - **Use project documentation**: If README.md or other documentation is provided above, use it to understand the project's main purpose, goals, and key features
 - **Prioritize functional importance**: Focus on components that directly serve the project's main purpose rather than supporting utilities
@@ -1471,12 +1646,12 @@ Create a concise, well-structured index page that serves as the entry point for 
 - **Do NOT** make assumptions about deployment, hosting, or infrastructure not shown in the files
 - **Do NOT** include installation instructions or setup steps unless clearly evident from config files
 - Include the repository link prominently for easy access
-
+ 
 {PROFESSIONAL_TONE_GUIDELINES}
-
+ 
 {OUTPUT_FORMAT_INSTRUCTIONS}
 - Make technical explanations **accessible to developers at all experience levels**
-
+ 
 ## Output Format
 Provide the complete Markdown content for the index page{lang_hint}. Start with the main title, then immediately include the Generation Metadata section with all the metadata information provided above, followed by all other required sections. Do NOT wrap the output in code fences.
 """
@@ -1567,28 +1742,39 @@ Provide the complete Markdown content for the index page{lang_hint}. Start with 
                 license_info["name"] = "See license file"
         
         return license_info
-
+ 
     def exec(self, prep_res):
         output_path = prep_res["output_path"]
         index_content = prep_res["index_content"]
         chapter_files = prep_res["chapter_files"]
+        beginner_friendly_episode = prep_res["beginner_friendly_episode"] # NEW: Get the beginner-friendly content
 
         print(f"Combining tutorial into directory: {output_path}")
         # Rely on Node's built-in retry/fallback
         os.makedirs(output_path, exist_ok=True)
 
+        # Watermark text
+        watermark = "\n\nWiki generated by: CoDoC"
+
         # Write index.md
         index_filepath = os.path.join(output_path, "index.md")
         with open(index_filepath, "w", encoding="utf-8") as f:
-            f.write(index_content)
+            f.write(index_content + watermark)
         print(f"  - Wrote {index_filepath}")
 
         # Write chapter files
         for chapter_info in chapter_files:
             chapter_filepath = os.path.join(output_path, chapter_info["filename"])
             with open(chapter_filepath, "w", encoding="utf-8") as f:
-                f.write(chapter_info["content"])
+                f.write(chapter_info["content"] + watermark)
             print(f"  - Wrote {chapter_filepath}")
+        
+        # Write beginner-friendly episode
+        if beginner_friendly_episode:
+            episode_filepath = os.path.join(output_path, "beginner_friendly_episode.md")
+            with open(episode_filepath, "w", encoding="utf-8") as f:
+                f.write(beginner_friendly_episode + watermark)
+            print(f"  - Wrote {episode_filepath}")
 
         return output_path  # Return the final path
 
